@@ -1,0 +1,312 @@
+#!/bin/bash
+
+# Test download speed through all VPN servers
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+WG_DIR="$CONFIG_DIR/wireguard"
+
+# Check if killswitch is active
+load_config "$CONFIG_FILE"
+if [[ "$KILLSWITCH" == "true" ]]; then
+  echo ""
+  echo "╔════════════════════════════════════════════════════════════╗"
+  echo "║ Speedtest Unavailable                                      ║"
+  echo "╠════════════════════════════════════════════════════════════╣"
+  echo "║ Speed testing requires connecting to each server and       ║"
+  echo "║ measuring download speed.                                  ║"
+  echo "║                                                            ║"
+  echo "║ With the killswitch active, server switching would be      ║"
+  echo "║ blocked during the test.                                   ║"
+  echo "║                                                            ║"
+  echo "║ To run speedtest:                                          ║"
+  echo "║   • Disable the killswitch first                           ║"
+  echo "╚════════════════════════════════════════════════════════════╝"
+  echo ""
+  read -r -p "Press Enter to continue..."
+  exit 0
+fi
+
+if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
+  notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+  echo "Error: No WireGuard configurations found in $WG_DIR"
+  exit 1
+fi
+
+# Check if curl is available
+if ! command -v curl &> /dev/null; then
+  echo "Error: curl is required for speed testing"
+  exit 1
+fi
+
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║ VPN Server Speed Test                                      ║"
+echo "╠════════════════════════════════════════════════════════════╣"
+echo "║ This will test download speed through each VPN server.     ║"
+echo "║                                                            ║"
+echo "║ Process:                                                   ║"
+echo "║   • Connect to each server                                 ║"
+echo "║   • Download a 10MB test file                              ║"
+echo "║   • Measure average speed                                  ║"
+echo "║   • Disconnect and test next server                        ║"
+echo "║                                                            ║"
+echo "║ Note: This may take several minutes depending on the       ║"
+echo "║       number of servers configured.                        ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+read -r -p "Continue with speed test? [y/N] " response
+if [[ ! "$response" =~ ^[Yy]$ ]]; then
+  echo "Speed test cancelled"
+  exit 0
+fi
+
+echo ""
+read -r -p "Include non-VPN connection in results for comparison? [y/N] " include_direct
+TEST_DIRECT=false
+if [[ "$include_direct" =~ ^[Yy]$ ]]; then
+  TEST_DIRECT=true
+fi
+
+echo ""
+echo "Starting speed tests..."
+echo ""
+
+# Show current public IP before starting
+info "Checking current public IP..."
+INITIAL_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+if [[ -n "$INITIAL_IP" ]]; then
+  info "Current IP: $INITIAL_IP"
+else
+  info "Current IP: Unable to retrieve"
+fi
+echo ""
+
+# Test file URL (10MB file from a fast CDN)
+TEST_URL="http://speedtest.tele2.net/10MB.zip"
+
+# Store original connection state
+ORIGINAL_CONN=""
+if is_connected "${CONNECTION_NAME:-wg0}"; then
+  ORIGINAL_CONN=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" | cut -d= -f2)
+fi
+
+# Results storage
+RESULTS_FILE=$(mktemp)
+trap 'rm -f "$RESULTS_FILE"' EXIT
+
+# Test non-VPN connection if requested
+if [[ "$TEST_DIRECT" == "true" ]]; then
+  echo "Testing non-VPN connection..."
+  echo ""
+
+  # Make sure we're disconnected
+  if is_connected "${CONNECTION_NAME:-wg0}"; then
+    info "Disconnecting from VPN to test direct connection..."
+    lazyvpn-disconnect >/dev/null 2>&1
+    sleep 2
+  fi
+
+  # Get public IP
+  info "Checking public IP..."
+  DIRECT_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+  if [[ -n "$DIRECT_IP" ]]; then
+    info "Public IP: $DIRECT_IP"
+  else
+    info "Public IP: Unable to retrieve"
+  fi
+  echo ""
+
+  # Run speed test
+  info "Running speed test on direct connection..."
+  direct_speed=$(curl -o /dev/null -s -w '%{speed_download}' --connect-timeout 10 --max-time 30 "$TEST_URL" 2>/dev/null)
+
+  # Convert bytes/sec to Mbps
+  if [[ -n "$direct_speed" ]] && [[ "$direct_speed" != "0.000" ]] && [[ "$direct_speed" != "0" ]]; then
+    direct_speed_mbps=$(echo "scale=2; $direct_speed * 8 / 1000000" | bc -l 2>/dev/null || echo "0")
+    if [[ "$direct_speed_mbps" != "0" ]] && [[ "$direct_speed_mbps" != "0.00" ]]; then
+      info "✓ Speed: ${direct_speed_mbps} Mbps"
+      # Store with special marker for non-VPN connection
+      echo "DIRECT||$direct_speed_mbps|ok|$DIRECT_IP" >> "$RESULTS_FILE"
+      # Record to performance history
+      record_performance "DIRECT" "speed" "$direct_speed_mbps" "ok"
+    else
+      info "✗ Speed test returned 0"
+      echo "DIRECT||0|timeout|" >> "$RESULTS_FILE"
+      record_performance "DIRECT" "speed" "0" "failed"
+    fi
+  else
+    info "✗ Speed test failed"
+    echo "DIRECT||0|timeout|" >> "$RESULTS_FILE"
+    record_performance "DIRECT" "speed" "0" "failed"
+  fi
+
+  echo ""
+  sleep 2
+fi
+
+# Test each server
+SERVER_COUNT=$(find "$WG_DIR" -name "*.conf" -type f | wc -l)
+CURRENT=0
+
+for conf in "$WG_DIR"/*.conf; do
+  [[ -f "$conf" ]] || continue
+
+  ((CURRENT++))
+  filename=$(basename "$conf" .conf)
+
+  # Get pretty server name for display
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  PRETTY_NAME=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
+
+  # Also get provider for results storage
+  info_output=$("$SCRIPT_DIR/lazyvpn-get-server-info" "$filename")
+  provider=$(echo "$info_output" | grep "^provider=" | cut -d= -f2)
+
+  echo "[$CURRENT/$SERVER_COUNT] Testing $PRETTY_NAME..."
+
+  # Connect to server
+  echo "  Connecting..."
+  if ! lazyvpn-connect "$filename" >/dev/null 2>&1; then
+    echo "  ✗ Connection failed"
+    echo "$filename|$provider|0|failed|" >> "$RESULTS_FILE"
+    continue
+  fi
+
+  # Verify the VPN interface is actually up
+  CONN_NAME="${CONNECTION_NAME:-wg0}"
+  if ! ip link show "$CONN_NAME" &>/dev/null; then
+    echo "  ✗ VPN interface not created"
+    echo "$filename|$provider|0|failed|" >> "$RESULTS_FILE"
+    lazyvpn-disconnect >/dev/null 2>&1
+    sleep 1
+    continue
+  fi
+
+  # Verify internet connectivity with retry logic
+  echo "  Verifying internet connectivity..."
+  PING_SUCCESS=false
+  for attempt in 1 2 3 4 5; do
+    if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+      PING_SUCCESS=true
+      break
+    fi
+    # If ping failed and we have retries left, wait before trying again
+    if [[ $attempt -lt 5 ]]; then
+      sleep 1
+    fi
+  done
+
+  if [[ "$PING_SUCCESS" != "true" ]]; then
+    echo "  ✗ Connection has no internet access"
+    echo "$filename|$provider|0|no-internet|" >> "$RESULTS_FILE"
+    lazyvpn-disconnect >/dev/null 2>&1
+    sleep 1
+    continue
+  fi
+
+  # Show public IP via this server
+  echo "  Checking public IP..."
+  TEST_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+  if [[ -n "$TEST_IP" ]]; then
+    echo "  Public IP: $TEST_IP"
+    # Verify IP actually changed (traffic going through VPN)
+    if [[ "$TEST_IP" == "$INITIAL_IP" ]]; then
+      echo "  ✗ Public IP unchanged - traffic not routing through VPN"
+      echo "$filename|$provider|0|routing-failed|$TEST_IP" >> "$RESULTS_FILE"
+      lazyvpn-disconnect >/dev/null 2>&1
+      sleep 1
+      continue
+    fi
+  else
+    echo "  Public IP: Unable to retrieve"
+    TEST_IP=""
+  fi
+
+  # Download test file and measure speed
+  echo "  Running speed test..."
+  speed=$(curl -o /dev/null -s -w '%{speed_download}' --connect-timeout 10 --max-time 30 "$TEST_URL" 2>/dev/null)
+
+  # Convert bytes/sec to Mbps
+  if [[ -n "$speed" ]] && [[ "$speed" != "0.000" ]] && [[ "$speed" != "0" ]]; then
+    speed_mbps=$(echo "scale=2; $speed * 8 / 1000000" | bc -l 2>/dev/null || echo "0")
+    if [[ "$speed_mbps" != "0" ]] && [[ "$speed_mbps" != "0.00" ]]; then
+      echo "  ✓ Speed: ${speed_mbps} Mbps"
+      # Store with provider info and public IP for results
+      echo "$filename|$provider|$speed_mbps|ok|$TEST_IP" >> "$RESULTS_FILE"
+      # Record performance data
+      record_performance "$filename" "speed" "$speed_mbps" "ok"
+    else
+      echo "  ✗ Speed test returned 0"
+      echo "$filename|$provider|0|timeout|$TEST_IP" >> "$RESULTS_FILE"
+      record_performance "$filename" "speed" "0" "failed"
+    fi
+  else
+    echo "  ✗ Speed test failed (curl returned: $speed)"
+    echo "$filename|$provider|0|timeout|$TEST_IP" >> "$RESULTS_FILE"
+    record_performance "$filename" "speed" "0" "failed"
+  fi
+
+  # Disconnect
+  echo "  Disconnecting..."
+  lazyvpn-disconnect >/dev/null 2>&1
+  sleep 2
+done
+
+echo ""
+echo "══════════════════════════════════════════════════════════════════════════════════"
+echo "                              SPEED TEST RESULTS"
+echo "══════════════════════════════════════════════════════════════════════════════════"
+echo ""
+
+# Sort results by speed (descending) and display
+sort -t'|' -k3 -rn "$RESULTS_FILE" | while IFS='|' read -r server provider speed status ip; do
+  # Handle non-VPN connection specially
+  if [[ "$server" == "DIRECT" ]]; then
+    DISPLAY_NAME="Direct Connection (No VPN)"
+  else
+    # Get pretty server name
+    DISPLAY_NAME=$(get_pretty_server_name "$server" "$SCRIPT_DIR")
+  fi
+
+  # Format with IP address
+  if [[ "$status" == "ok" ]]; then
+    if [[ -n "$ip" ]]; then
+      printf "%-50s %-20s %10s Mbps\n" "$DISPLAY_NAME" "($ip)" "$speed"
+    else
+      printf "%-50s %-20s %10s Mbps\n" "$DISPLAY_NAME" "" "$speed"
+    fi
+  else
+    printf "%-50s %-20s %10s\n" "$DISPLAY_NAME" "($ip)" "FAILED"
+  fi
+done
+
+echo ""
+echo "══════════════════════════════════════════════════════════════════════════════════"
+
+# Show final public IP after all tests complete
+echo ""
+info "Checking current public IP..."
+FINAL_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+if [[ -n "$FINAL_IP" ]]; then
+  info "Current IP: $FINAL_IP"
+else
+  info "Current IP: Unable to retrieve"
+fi
+
+# Restore original connection if there was one
+if [[ -n "$ORIGINAL_CONN" ]]; then
+  echo ""
+  read -r -p "Reconnect to original server ($ORIGINAL_CONN)? [Y/n] " response
+  if [[ ! "$response" =~ ^[Nn]$ ]]; then
+    echo "Reconnecting to $ORIGINAL_CONN..."
+    lazyvpn-connect "$ORIGINAL_CONN"
+  fi
+fi
+

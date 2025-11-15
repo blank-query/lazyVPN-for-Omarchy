@@ -1,0 +1,323 @@
+#!/bin/bash
+
+# LazyVPN Uninstallation Script
+
+echo "======================================="
+echo "  LazyVPN Uninstaller"
+echo "======================================="
+echo ""
+
+# --- Define Paths ---
+OMARCHY_BIN="$HOME/.local/share/omarchy/bin"
+CONFIG_DIR="$HOME/.config/lazyvpn"
+AUTOSTART_FILE="$HOME/.config/autostart/lazyvpn.desktop"
+OMARCHY_MENU_FILE="$OMARCHY_BIN/omarchy-menu"
+OMARCHY_MENU_BACKUP="$OMARCHY_MENU_FILE.backup"
+
+# --- Check for active VPN connection ---
+echo "Checking for active VPN connection..."
+CONNECTION_NAME="wg0"  # Default
+
+# Source common functions if available (for is_connected check)
+if [[ -f "$OMARCHY_BIN/lazyvpn-common" ]]; then
+  # shellcheck source=/dev/null
+  source "$OMARCHY_BIN/lazyvpn-common"
+fi
+
+if [[ -f "$CONFIG_DIR/config" ]]; then
+  # Load connection name from config if it exists
+  source "$CONFIG_DIR/config" 2>/dev/null
+  CONNECTION_NAME="${CONNECTION_NAME:-wg0}"
+fi
+
+# Check if VPN is actually connected (not just if interface exists)
+VPN_CONNECTED=false
+if type is_connected &>/dev/null && is_connected "$CONNECTION_NAME"; then
+  VPN_CONNECTED=true
+elif ip link show "$CONNECTION_NAME" &>/dev/null; then
+  # Fallback: check if interface exists and has state routable/degraded
+  state=$(networkctl status "$CONNECTION_NAME" 2>/dev/null | grep -E "^\s*State:" | awk '{print $2}')
+  if [[ "$state" == "routable" ]] || [[ "$state" == "degraded" ]]; then
+    VPN_CONNECTED=true
+  fi
+fi
+
+if [[ "$VPN_CONNECTED" == "true" ]]; then
+  echo ""
+  echo "⚠️  WARNING: VPN connection is currently ACTIVE!"
+  echo ""
+  echo "You are currently connected to a VPN server."
+  echo "If you uninstall while connected, you may experience:"
+  echo "  • Loss of internet connectivity"
+  echo "  • Difficulty disconnecting from the VPN"
+  echo "  • Network routing issues"
+  echo ""
+  read -r -p "Disconnect from VPN before uninstalling? [Y/n] " disconnect_choice
+
+  if [[ ! "$disconnect_choice" =~ ^[Nn]$ ]]; then
+    echo ""
+    echo "Disconnecting from VPN..."
+
+    # Try to use the disconnect script if it exists
+    if [[ -x "$OMARCHY_BIN/lazyvpn-disconnect" ]]; then
+      "$OMARCHY_BIN/lazyvpn-disconnect" 2>/dev/null
+    else
+      # Manual disconnect if script not available
+      echo "  - Removing systemd-networkd configuration files..."
+      sudo rm -f "/etc/systemd/network/99-${CONNECTION_NAME}.netdev" 2>/dev/null
+      sudo rm -f "/etc/systemd/network/99-${CONNECTION_NAME}.network" 2>/dev/null
+
+      echo "  - Removing VPN interface..."
+      sudo ip link delete "$CONNECTION_NAME" 2>/dev/null || true
+
+      echo "  - Restarting systemd-networkd..."
+      sudo systemctl restart systemd-networkd
+    fi
+
+    echo "  ✓ Disconnected successfully"
+    sleep 2
+  else
+    echo ""
+    echo "⚠️  Proceeding with uninstall while VPN is connected."
+    echo "   You may need to manually disconnect after uninstall:"
+    echo "   sudo ip link delete $CONNECTION_NAME"
+    echo "   sudo rm -f /etc/systemd/network/99-${CONNECTION_NAME}.*"
+    echo "   sudo systemctl restart systemd-networkd"
+    echo ""
+    read -r -p "Press Enter to continue with uninstall..."
+  fi
+else
+  echo "  - No active VPN connection detected."
+fi
+echo ""
+
+# --- User Choice for WireGuard Configs ---
+WG_CONFIG_DIR="$CONFIG_DIR/wireguard"
+echo "Your WireGuard server configurations are stored in:"
+echo "$WG_CONFIG_DIR"
+echo ""
+
+delete_configs="n" # Default to not deleting configs
+
+if [[ -d "$WG_CONFIG_DIR" ]] && ls "$WG_CONFIG_DIR"/*.conf 1>/dev/null 2>&1; then
+  echo "The following WireGuard config files were found:"
+  ls -1 "$WG_CONFIG_DIR"/*.conf | sed "s|^$WG_CONFIG_DIR/|  - |"
+  echo ""
+  read -r -p "Do you want to DELETE these .conf files? (This cannot be undone) [y/N] " delete_configs
+  if [[ "$delete_configs" =~ ^[Yy]$ ]]; then
+    echo "-> WireGuard configs will be permanently deleted."
+  else
+    echo "-> WireGuard configs will be kept."
+  fi
+else
+  echo "No WireGuard config files found."
+  echo "-> No WireGuard configs to delete."
+fi
+echo ""
+
+# --- Step 1: Clean up iptables rules ---
+echo "Step 1: Cleaning up firewall rules..."
+
+# Check if killswitch was ever used by looking for the KILLSWITCH key in config
+KILLSWITCH_CONFIGURED=false
+if [[ -f "$CONFIG_DIR/config" ]] && grep -q "^KILLSWITCH=" "$CONFIG_DIR/config"; then
+  KILLSWITCH_CONFIGURED=true
+fi
+
+if [[ "$KILLSWITCH_CONFIGURED" == "true" ]]; then
+  # Killswitch was configured at some point, check if rules exist (requires sudo)
+  if sudo iptables -L LAZYVPN_OUT >/dev/null 2>&1; then
+    echo "  - Found existing firewall rules. Removing them..."
+    sudo iptables -D OUTPUT -j LAZYVPN_OUT 2>/dev/null && echo "    - Removed IPv4 OUTPUT jump"
+    sudo ip6tables -D OUTPUT -j LAZYVPN_OUT 2>/dev/null && echo "    - Removed IPv6 OUTPUT jump"
+    sudo iptables -F LAZYVPN_OUT 2>/dev/null && echo "    - Flushed LAZYVPN_OUT chain"
+    sudo ip6tables -F LAZYVPN_OUT 2>/dev/null && echo "    - Flushed LAZYVPN_OUT chain (IPv6)"
+    sudo iptables -X LAZYVPN_OUT 2>/dev/null && echo "    - Deleted LAZYVPN_OUT chain"
+    sudo ip6tables -X LAZYVPN_OUT 2>/dev/null && echo "    - Deleted LAZYVPN_OUT chain (IPv6)"
+    echo "  Firewall cleanup complete."
+  else
+    echo "  - No LazyVPN firewall rules found (already removed)."
+  fi
+else
+  echo "  - Killswitch was never configured, skipping firewall cleanup."
+fi
+echo ""
+
+# --- Step 2: Remove LazyVPN scripts ---
+echo "Step 2: Removing LazyVPN scripts..."
+scripts_to_remove=("$OMARCHY_BIN"/lazyvpn-*)
+if [[ -e "${scripts_to_remove[0]}" ]]; then # Check if the glob expanded to existing files
+  for script in "${scripts_to_remove[@]}"; do
+    if [[ -f "$script" ]]; then
+      rm -f "$script"
+      echo "  - Removed: $(basename "$script")"
+    fi
+  done
+else
+  echo "  - No scripts found to remove."
+fi
+echo ""
+
+# --- Step 3: Remove LazyVPN from omarchy-menu ---
+echo "Step 3: Removing LazyVPN integration from omarchy-menu..."
+
+# Check if LazyVPN is integrated
+if grep -q "LazyVPN" "$OMARCHY_MENU_FILE"; then
+  # Try surgical removal with AWK
+  if awk '
+    # Skip the show_lazyvpn_menu function and its blank line after
+    /^show_lazyvpn_menu\(\) \{/ {
+      getline  # skip the lazyvpn-menu line
+      getline  # skip the }
+      getline  # skip the blank line after
+      next
+    }
+
+    # Remove LazyVPN from the menu options string
+    /menu "Go" ".*LazyVPN/ {
+      gsub(/󰖂  LazyVPN\\n/, "")
+    }
+
+    # Skip the lazyvpn case handler line
+    /^\s*\*lazyvpn\*\) show_lazyvpn_menu ;;/ {
+      next
+    }
+
+    # Print all other lines
+    { print }
+  ' "$OMARCHY_MENU_FILE" > "$OMARCHY_MENU_FILE.tmp"; then
+    # AWK succeeded, apply changes
+    mv "$OMARCHY_MENU_FILE.tmp" "$OMARCHY_MENU_FILE" && chmod +x "$OMARCHY_MENU_FILE"
+    echo "  - Removed LazyVPN integration from omarchy-menu"
+  else
+    # AWK failed, restore from backup if available
+    echo "  - Surgical removal failed, attempting restore from backup..."
+    if [[ -f "$OMARCHY_MENU_BACKUP" ]]; then
+      cp "$OMARCHY_MENU_BACKUP" "$OMARCHY_MENU_FILE"
+      chmod +x "$OMARCHY_MENU_FILE"
+      echo "  - Restored omarchy-menu from backup"
+    else
+      echo "  ⚠ WARNING: Backup not found. omarchy-menu may need manual repair."
+      echo "  You can restore Omarchy by reinstalling it."
+    fi
+    rm -f "$OMARCHY_MENU_FILE.tmp"
+  fi
+
+  echo "  - Restarting menu to apply changes..."
+  nohup omarchy-restart-walker > /dev/null 2>&1 &
+else
+  echo "  - LazyVPN not found in omarchy-menu (already removed or never installed)"
+fi
+echo ""
+
+# --- Step 4: Remove keyboard shortcut ---
+echo "Step 4: Removing keyboard shortcut..."
+
+# Remove from Hyprland bindings
+HYPR_BINDINGS="$HOME/.config/hypr/bindings.conf"
+if [[ -f "$HYPR_BINDINGS" ]]; then
+  if grep -q "LazyVPN" "$HYPR_BINDINGS"; then
+    # Remove the LazyVPN comment and keybinding lines
+    sed -i '/# LazyVPN/d' "$HYPR_BINDINGS"
+    sed -i '/bindd = SUPER, L, LazyVPN/d' "$HYPR_BINDINGS"
+    echo "  - Removed SUPER+L keybinding from Hyprland"
+
+    # Reload Hyprland config
+    hyprctl reload >/dev/null 2>&1
+    echo "  - Reloaded Hyprland configuration"
+  else
+    echo "  - No LazyVPN keybinding found in Hyprland config"
+  fi
+else
+  echo "  - Hyprland bindings.conf not found"
+fi
+
+# Remove from keybindings helper
+KEYBINDINGS_SCRIPT="$OMARCHY_BIN/omarchy-menu-keybindings"
+if [[ -f "$KEYBINDINGS_SCRIPT" ]]; then
+  if grep -q "LazyVPN" "$KEYBINDINGS_SCRIPT"; then
+    sed -i '/echo "SUPER,L,LazyVPN,exec,lazyvpn-menu"/d' "$KEYBINDINGS_SCRIPT"
+    echo "  - Removed from keybindings helper"
+  else
+    echo "  - No LazyVPN entry found in keybindings helper"
+  fi
+else
+  echo "  - Keybindings script not found"
+fi
+echo ""
+
+# --- Step 5: Remove Autostart entry ---
+echo "Step 5: Removing Autostart entry..."
+if [[ -f "$AUTOSTART_FILE" ]]; then
+  rm -f "$AUTOSTART_FILE"
+  echo "  - Removed autostart file."
+else
+  echo "  - No autostart file found."
+fi
+echo ""
+
+# --- Step 6: Remove Configuration Directory ---
+echo "Step 6: Removing configuration files..."
+if [[ ! -d "$CONFIG_DIR" ]]; then
+  echo "  - Configuration directory not found."
+else
+  if [[ "$delete_configs" =~ ^[Yy]$ ]]; then
+    rm -rf "$CONFIG_DIR"
+    echo "  - Removed entire configuration directory: $CONFIG_DIR"
+  else
+    # Remove everything EXCEPT the wireguard folder
+    find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 ! -name 'wireguard' -exec rm -rf {} +
+    echo "  - Removed configuration files, but preserved wireguard configs."
+  fi
+fi
+echo ""
+
+# --- Step 7: Clean up systemd-networkd files ---
+echo "Step 7: Cleaning up systemd-networkd configuration..."
+NETDEV_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.netdev"
+NETWORK_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.network"
+
+if [[ -f "$NETDEV_FILE" ]] || [[ -f "$NETWORK_FILE" ]]; then
+  echo "  - Found leftover systemd-networkd files. Removing..."
+  sudo rm -f "$NETDEV_FILE" 2>/dev/null && echo "    - Removed: $NETDEV_FILE"
+  sudo rm -f "$NETWORK_FILE" 2>/dev/null && echo "    - Removed: $NETWORK_FILE"
+
+  # Check if interface still exists
+  if ip link show "$CONNECTION_NAME" &>/dev/null; then
+    echo "  - VPN interface still exists. Removing..."
+    sudo ip link delete "$CONNECTION_NAME" 2>/dev/null && echo "    - Removed interface: $CONNECTION_NAME"
+  fi
+
+  echo "  - Restarting systemd-networkd to apply changes..."
+  sudo systemctl restart systemd-networkd
+  echo "  - Systemd-networkd cleanup complete."
+else
+  echo "  - No systemd-networkd files found to clean up."
+fi
+echo ""
+
+# --- Step 8: Remove sudoers configuration ---
+echo "Step 8: Removing sudoers configuration..."
+if sudo test -f /etc/sudoers.d/lazyvpn; then
+  if sudo rm -f /etc/sudoers.d/lazyvpn; then
+    # Verify it's actually gone
+    if sudo test -f /etc/sudoers.d/lazyvpn; then
+      echo "  ⚠ WARNING: Failed to remove sudoers file!"
+      echo "  Please manually remove: sudo rm /etc/sudoers.d/lazyvpn"
+    else
+      echo "  ✓ Removed sudoers configuration"
+    fi
+  else
+    echo "  ⚠ ERROR: Failed to remove sudoers configuration"
+    echo "  Please manually remove: sudo rm /etc/sudoers.d/lazyvpn"
+  fi
+else
+  echo "  - No sudoers configuration found"
+fi
+echo ""
+
+echo "======================================="
+echo "  Uninstallation Complete"
+echo "======================================="
+echo "LazyVPN has been removed from your system."
+echo "Thank you for using LazyVPN!"

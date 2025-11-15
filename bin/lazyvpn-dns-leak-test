@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# DNS Leak Test - verify DNS queries go through VPN
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# Load config
+load_config "$CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║ DNS Leak Test                                              ║"
+echo "╠════════════════════════════════════════════════════════════╣"
+echo "║ This will verify that your DNS queries are going through  ║"
+echo "║ the VPN and not leaking to your ISP.                      ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+# Check if connected
+if ! is_connected "$CONN_NAME"; then
+  error "Not connected to VPN. Connect first to test DNS leaks."
+  exit 1
+fi
+
+# Get expected DNS server from config
+LAST_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" | cut -d= -f2)
+if [[ -z "$LAST_SERVER" ]]; then
+  error "No last connected server found"
+  exit 1
+fi
+
+WG_DIR="$CONFIG_DIR/wireguard"
+VPN_CONFIG="$WG_DIR/${LAST_SERVER}.conf"
+
+if [[ ! -f "$VPN_CONFIG" ]]; then
+  error "Config not found for $LAST_SERVER"
+  exit 1
+fi
+
+# Get VPN DNS server
+VPN_DNS=$(grep -m1 "^DNS" "$VPN_CONFIG" | cut -d= -f2 | tr -d ' ' | cut -d',' -f1)
+if [[ -z "$VPN_DNS" ]]; then
+  warn "Could not determine VPN DNS server from config"
+  VPN_DNS="unknown"
+fi
+
+info "Testing DNS configuration..."
+info "Expected VPN DNS: $VPN_DNS"
+echo ""
+
+# Test 1: Check what DNS server is configured on the VPN interface
+info "Test 1: Checking DNS configuration..."
+if command -v resolvectl &>/dev/null; then
+  # systemd-resolved
+  ACTIVE_DNS=$(resolvectl status "$CONN_NAME" 2>/dev/null | grep "DNS Servers" | awk '{print $3}')
+  if [[ -n "$ACTIVE_DNS" ]]; then
+    info "  Configured DNS for $CONN_NAME: $ACTIVE_DNS"
+    if [[ "$ACTIVE_DNS" == "$VPN_DNS" ]]; then
+      info "  ✓ DNS configuration matches VPN settings"
+    else
+      warn "  ⚠️  DNS configuration mismatch!"
+      warn "     Expected: $VPN_DNS"
+      warn "     Configured: $ACTIVE_DNS"
+    fi
+  else
+    warn "  Could not determine configured DNS server"
+  fi
+else
+  # Fallback to /etc/resolv.conf
+  ACTIVE_DNS=$(grep "^nameserver" /etc/resolv.conf | head -n1 | awk '{print $2}')
+  info "  Configured DNS (from resolv.conf): $ACTIVE_DNS"
+fi
+echo ""
+
+# Test 2: Verify DNS resolution works through VPN
+info "Test 2: Verifying DNS resolution through VPN..."
+# Use nslookup to test DNS resolution (checks if we can resolve domain names)
+info "  Testing DNS resolution: nslookup google.com"
+NSLOOKUP_OUTPUT=$(nslookup google.com 2>&1)
+
+if echo "$NSLOOKUP_OUTPUT" | grep -q "Address:.*[0-9]"; then
+  RESOLVED_IP=$(echo "$NSLOOKUP_OUTPUT" | grep "^Address:" | tail -n1 | awk '{print $2}')
+  info "  ✓ DNS resolution working through VPN"
+  info "  google.com resolved to: $RESOLVED_IP"
+else
+  warn "  ⚠️  DNS resolution failed"
+  if echo "$NSLOOKUP_OUTPUT" | grep -qi "connection timed out"; then
+    warn "     DNS server not responding"
+  elif echo "$NSLOOKUP_OUTPUT" | grep -qi "can't find"; then
+    warn "     Cannot resolve domain names"
+  else
+    warn "     DNS query failed"
+  fi
+fi
+echo ""
+
+# Summary
+echo "═══════════════════════════════════════════════════════════"
+echo "DNS Leak Test Summary:"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+info "VPN DNS Server: $VPN_DNS"
+info "Active DNS Server: ${ACTIVE_DNS:-unknown}"
+echo ""
+
+if [[ "$ACTIVE_DNS" == "$VPN_DNS" ]]; then
+  info "✓ DNS configuration appears correct"
+  info "✓ Queries should be going through VPN"
+else
+  warn "⚠️  DNS configuration mismatch detected"
+  warn "   This may indicate a DNS leak"
+  echo ""
+  info "Recommendations:"
+  info "  1. Disconnect and reconnect to VPN"
+  info "  2. Check if killswitch is properly configured"
+  info "  3. Verify systemd-resolved configuration"
+fi
+echo ""

@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# Disconnect from VPN (systemd-networkd version)
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# Load connection name from config
+load_config "$CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+# Validate CONNECTION_NAME
+if [[ ! "$CONN_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  error "Invalid CONNECTION_NAME in config"
+fi
+
+# Check if connection is active
+if ! is_connected "$CONN_NAME"; then
+  info "Not connected to any LazyVPN server"
+  exit 0
+fi
+
+# Show current public IP before disconnecting
+echo ""
+info "Checking current public IP..."
+BEFORE_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+if [[ -n "$BEFORE_IP" ]]; then
+  info "Current IP: $BEFORE_IP (via VPN)"
+else
+  info "Current IP: Unable to retrieve"
+fi
+echo ""
+
+info "Disconnecting from VPN..."
+
+# Bring down the interface
+sudo networkctl down "$CONN_NAME"
+
+# Delete the .netdev and .network files
+NETDEV_FILE="/etc/systemd/network/99-${CONN_NAME}.netdev"
+NETWORK_FILE="/etc/systemd/network/99-${CONN_NAME}.network"
+
+if [ -f "$NETDEV_FILE" ]; then
+    sudo rm "$NETDEV_FILE"
+fi
+
+if [ -f "$NETWORK_FILE" ]; then
+    sudo rm "$NETWORK_FILE"
+fi
+
+# Clean up routes (VPN endpoint host route might persist)
+# The default route through VPN will be removed when interface goes down
+# Get VPN endpoint from netdev file before removing it
+if ip route show | grep -q "via.*$CONN_NAME"; then
+    info "Cleaning up VPN routes..."
+    # Remove routes through VPN interface
+    sudo ip route del default dev "$CONN_NAME" 2>/dev/null || true
+fi
+
+# Restart systemd-networkd to apply changes
+info "Restarting systemd-networkd..."
+sudo systemctl restart systemd-networkd
+
+info "Disconnected successfully"
+
+# Load current config to check killswitch auto-disable setting
+load_config "$CONFIG_FILE"
+
+# Check if killswitch is active (by checking for the DROP rule)
+if [[ "${KILLSWITCH:-false}" == "true" ]] && sudo iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
+  case "${KILLSWITCH_AUTO_DISABLE:-true}" in
+    true)
+      # AUTO: automatically disable killswitch
+      lazyvpn-disable-killswitch
+      notify "Killswitch automatically disabled."
+      ;;
+    false)
+      # PROMPT: ask user what to do
+      echo ""
+      echo "╔════════════════════════════════════════════════════════╗"
+      echo "║ Killswitch Active                                      ║"
+      echo "╠════════════════════════════════════════════════════════╣"
+      echo "║ The killswitch is currently blocking all traffic.      ║"
+      echo "║                                                        ║"
+      echo "║ Do you want to disable the killswitch?                 ║"
+      echo "║                                                        ║"
+      echo "║   YES - Restore normal internet access                 ║"
+      echo "║   NO  - Keep killswitch active (blocks all internet    ║"
+      echo "║         until you reconnect to any VPN server)         ║"
+      echo "╚════════════════════════════════════════════════════════╝"
+      echo ""
+      read -r -p "Disable killswitch? [Y/n]: " response
+      if [[ "$response" =~ ^[Nn]$ ]]; then
+        notify "Killswitch remains active.\nInternet is blocked until you reconnect to VPN."
+        info "Killswitch remains active"
+        info "Internet is blocked - reconnect to any VPN server to restore access"
+      else
+        lazyvpn-disable-killswitch
+        notify "Killswitch disabled."
+        info "Killswitch disabled"
+      fi
+      ;;
+    never)
+      # NEVER: keep killswitch active, notify user
+      notify "Killswitch remains active.\nInternet is blocked until you reconnect to VPN."
+      info "Killswitch remains active (set to NEVER mode)"
+      info "Internet is blocked - reconnect to any VPN server to restore access"
+      ;;
+  esac
+fi
+
+# Show public IP after disconnect (if killswitch is not active)
+if [[ "${KILLSWITCH:-false}" != "true" ]] || ! sudo iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
+  echo ""
+  info "Checking public IP..."
+  sleep 2
+
+  PUBLIC_IP=$(curl -s --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null)
+
+  if [[ -n "$PUBLIC_IP" ]]; then
+    info "Public IP: $PUBLIC_IP (disconnected)"
+  else
+    info "Public IP: Unable to retrieve"
+  fi
+fi

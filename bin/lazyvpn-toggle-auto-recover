@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Toggle automatic VPN reconnection on failure
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+PID_FILE="$CONFIG_DIR/.auto-recover.pid"
+
+# Load current config
+load_config "$CONFIG_FILE"
+
+# Toggle the setting
+if [[ "${AUTO_RECOVER:-true}" == "true" ]]; then
+  NEW_VALUE="false"
+
+  # Stop the monitor if running
+  if [[ -f "$PID_FILE" ]]; then
+    MONITOR_PID=$(cat "$PID_FILE")
+    if kill -0 "$MONITOR_PID" 2>/dev/null; then
+      kill "$MONITOR_PID"
+      rm -f "$PID_FILE"
+    fi
+  fi
+else
+  NEW_VALUE="true"
+
+  # Start the monitor
+  nohup "$SCRIPT_DIR/lazyvpn-auto-recover-daemon" >/dev/null 2>&1 &
+fi
+
+# Update config atomically
+if ! atomic_config_update "AUTO_RECOVER" "$NEW_VALUE" "$CONFIG_FILE"; then
+  error "Failed to update config"
+  exit 1
+fi

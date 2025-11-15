@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# Update killswitch rules (requires sudo)
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+  info "Firewall killswitch requires root privileges"
+  info "You will be prompted for your password..."
+  exec sudo "$0" "$@"
+fi
+
+# Get the real user's home directory (not /root when running via sudo)
+if [[ -n "$SUDO_USER" ]]; then
+  REAL_HOME=$(eval echo ~$SUDO_USER)
+else
+  REAL_HOME="$HOME"
+fi
+
+CONFIG_DIR="$REAL_HOME/.config/lazyvpn"
+USER_CONFIG_FILE="$CONFIG_DIR/config"
+
+# Load user configuration
+load_config "$USER_CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+# Get the real user's WireGuard config directory
+if [[ -n "$SUDO_USER" ]]; then
+  WG_DIR="$REAL_HOME/.config/lazyvpn/wireguard"
+else
+  WG_DIR="$HOME/.config/lazyvpn/wireguard"
+fi
+LAST_CONNECTED_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$USER_CONFIG_FILE" | cut -d= -f2)
+
+if [[ -z "$LAST_CONNECTED_SERVER" ]]; then
+  # Run notify-send as the original user (not root)
+  if [[ -n "$SUDO_USER" ]]; then
+    sudo -u "$SUDO_USER" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$SUDO_USER")/bus notify-send "LazyVPN" "Cannot update killswitch: No server connection found."
+  fi
+  error "No LAST_CONNECTED_SERVER set in config"
+fi
+
+VPN_CONFIG_FILE="$WG_DIR/${LAST_CONNECTED_SERVER}.conf"
+
+if [[ ! -f "$VPN_CONFIG_FILE" ]]; then
+  # Run notify-send as the original user (not root)
+  if [[ -n "$SUDO_USER" ]]; then
+    sudo -u "$SUDO_USER" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$SUDO_USER")/bus notify-send "LazyVPN" "Cannot update killswitch: Server config not found."
+  fi
+  error "Last connected server config not found: $VPN_CONFIG_FILE"
+fi
+
+# Helper function to parse config values robustly
+parse_wg_value() {
+  local key="$1"
+  local file="$2"
+  # Match key (case-insensitive), optional spaces, =, optional spaces, value, strip comments
+  grep -i "^${key}" "$file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r'
+}
+
+# Extract DNS and endpoint from config
+NEW_DNS=$(parse_wg_value "DNS" "$VPN_CONFIG_FILE" | cut -d',' -f1)
+NEW_ENDPOINT=$(parse_wg_value "Endpoint" "$VPN_CONFIG_FILE" | cut -d: -f1)
+
+# Flush existing rules
+iptables -F LAZYVPN_OUT
+ip6tables -F LAZYVPN_OUT
+
+# Allow all loopback traffic (essential for systemd-resolved and local services)
+iptables -A LAZYVPN_OUT -o lo -j RETURN
+ip6tables -A LAZYVPN_OUT -o lo -j RETURN
+
+# Allow traffic to the new DNS server
+if [[ -n "$NEW_DNS" ]]; then
+  # Detect if DNS is IPv4 or IPv6
+  if [[ "$NEW_DNS" =~ : ]]; then
+    # IPv6 address (contains colon)
+    ip6tables -A LAZYVPN_OUT -p udp -d "$NEW_DNS" --dport 53 -j RETURN
+    ip6tables -A LAZYVPN_OUT -p tcp -d "$NEW_DNS" --dport 53 -j RETURN
+  else
+    # IPv4 address
+    iptables -A LAZYVPN_OUT -p udp -d "$NEW_DNS" --dport 53 -j RETURN
+    iptables -A LAZYVPN_OUT -p tcp -d "$NEW_DNS" --dport 53 -j RETURN
+  fi
+fi
+
+# Allow traffic to the new endpoint
+if [[ -n "$NEW_ENDPOINT" ]]; then
+  # Detect if endpoint is IPv4 or IPv6
+  if [[ "$NEW_ENDPOINT" =~ : ]]; then
+    # IPv6 address (contains colon)
+    ip6tables -A LAZYVPN_OUT -d "$NEW_ENDPOINT" -j RETURN
+  else
+    # IPv4 address
+    iptables -A LAZYVPN_OUT -d "$NEW_ENDPOINT" -j RETURN
+  fi
+fi
+
+# Allow local network traffic if configured
+if [[ "$ALLOW_LOCAL_NETWORK" == "true" ]]; then
+  # IPv4 private ranges
+  iptables -A LAZYVPN_OUT -d 192.168.0.0/16 -j RETURN
+  iptables -A LAZYVPN_OUT -d 10.0.0.0/8 -j RETURN
+  iptables -A LAZYVPN_OUT -d 172.16.0.0/12 -j RETURN
+  # IPv4 link-local
+  iptables -A LAZYVPN_OUT -d 169.254.0.0/16 -j RETURN
+
+  # IPv6 private ranges
+  ip6tables -A LAZYVPN_OUT -d fe80::/10 -j RETURN  # Link-local
+  ip6tables -A LAZYVPN_OUT -d fc00::/7 -j RETURN   # Unique local addresses
+fi
+
+# Allow traffic on the VPN interface
+iptables -A LAZYVPN_OUT -o "$CONN_NAME" -j RETURN
+ip6tables -A LAZYVPN_OUT -o "$CONN_NAME" -j RETURN
+
+# Drop all other traffic
+iptables -A LAZYVPN_OUT -j DROP
+ip6tables -A LAZYVPN_OUT -j DROP
+
+info "Killswitch rules updated"

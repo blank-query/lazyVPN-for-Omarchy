@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Connect to a random VPN server
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+WG_DIR="$HOME/.config/lazyvpn/wireguard"
+
+if [ ! -d "$WG_DIR" ]; then
+  error "WireGuard config directory not found: $WG_DIR"
+fi
+
+# Get a random server from the list of available servers
+SERVER=$(find "$WG_DIR" -name '*.conf' -print0 | shuf -n 1 -z | xargs -0 basename | sed 's/\.conf$//')
+
+if [ -z "$SERVER" ]; then
+  notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+  error "No VPN servers found"
+fi
+
+# Get pretty server name
+PRETTY_NAME=$(get_pretty_server_name "$SERVER" "$SCRIPT_DIR")
+info "Connecting to random server: $PRETTY_NAME"
+
+"$SCRIPT_DIR/lazyvpn-connect" "$SERVER"

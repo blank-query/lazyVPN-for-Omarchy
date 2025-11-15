@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Toggle local network access when killswitch is active
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_FILE="$HOME/.config/lazyvpn/config"
+
+# Load current config
+load_config "$CONFIG_FILE"
+
+# Toggle setting
+if [[ "$ALLOW_LOCAL_NETWORK" == "true" ]]; then
+  NEW_VALUE="false"
+else
+  NEW_VALUE="true"
+fi
+
+# Update config file atomically
+if ! atomic_config_update "ALLOW_LOCAL_NETWORK" "$NEW_VALUE" "$CONFIG_FILE"; then
+  error "Failed to update Local Network Access setting in config"
+fi
+
+# If killswitch is currently enabled, reapply rules
+if [[ "$KILLSWITCH" == "true" ]]; then
+  lazyvpn-update-killswitch >/dev/null 2>&1
+fi

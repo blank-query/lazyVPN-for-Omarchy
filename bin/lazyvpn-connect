@@ -1,0 +1,262 @@
+#!/bin/bash
+
+# Connect to a VPN server (systemd-networkd version)
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+SERVER_NAME="$1"
+
+if [[ -z "$SERVER_NAME" ]]; then
+  error "Server name required"
+fi
+
+# Validate server name to prevent path traversal and injection
+if [[ ! "$SERVER_NAME" =~ ^[a-zA-Z0-9._#-]+$ ]]; then
+  error "Invalid server name. Only alphanumeric characters, dash, underscore, hash, and dot allowed."
+fi
+
+# Prevent path traversal
+if [[ "$SERVER_NAME" == *".."* ]] || [[ "$SERVER_NAME" == "/"* ]]; then
+  error "Invalid server name"
+fi
+
+WG_DIR="$HOME/.config/lazyvpn/wireguard"
+VPN_CONFIG_FILE="$WG_DIR/${SERVER_NAME}.conf"
+CONFIG_DIR="$HOME/.config/lazyvpn"
+USER_CONFIG_FILE="$CONFIG_DIR/config"
+
+if [[ ! -f "$VPN_CONFIG_FILE" ]]; then
+  error "Server config not found: $VPN_CONFIG_FILE"
+fi
+
+# Validate WireGuard config has required sections
+if ! grep -q "\[Interface\]" "$VPN_CONFIG_FILE" || ! grep -q "\[Peer\]" "$VPN_CONFIG_FILE"; then
+  error "Invalid WireGuard config (missing [Interface] or [Peer] section)"
+fi
+
+# Load user configuration
+load_config "$USER_CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+# Validate CONNECTION_NAME doesn't contain regex metacharacters (safety check)
+if [[ ! "$CONN_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  error "Invalid CONNECTION_NAME in config. Only alphanumeric, dash, underscore, and dot allowed."
+fi
+
+# Get pretty server name for display
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_DISPLAY=$(get_pretty_server_name "$SERVER_NAME" "$SCRIPT_DIR")
+
+# Check if already connected to this specific server (query live state)
+if is_connected "$CONN_NAME"; then
+  # Get last connected server to compare
+  LAST_SERVER="${LAST_CONNECTED_SERVER:-}"
+  if [[ "$LAST_SERVER" == "$SERVER_NAME" ]]; then
+    info "Already connected to $SERVER_DISPLAY"
+    exit 0
+  fi
+fi
+
+info "Switching to server: $SERVER_DISPLAY"
+
+# Show current public IP before connecting
+echo ""
+info "Checking current public IP..."
+CURRENT_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+if [[ -n "$CURRENT_IP" ]]; then
+  info "Current IP: $CURRENT_IP"
+else
+  info "Current IP: Unable to retrieve"
+fi
+echo ""
+
+# Disconnect from current VPN if connected
+if is_connected "$CONN_NAME"; then
+  info "Disconnecting from current server..."
+  sudo ip link delete "$CONN_NAME" 2>/dev/null || true
+fi
+
+# Helper function to parse config values robustly
+parse_wg_value() {
+  local key="$1"
+  local file="$2"
+  # Match key (case-insensitive), optional spaces, =, optional spaces, value, strip comments
+  grep -i "^${key}" "$file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r'
+}
+
+# Parse WireGuard config values
+PRIVATE_KEY=$(parse_wg_value "PrivateKey" "$VPN_CONFIG_FILE")
+PUBLIC_KEY=$(parse_wg_value "PublicKey" "$VPN_CONFIG_FILE")
+ALLOWED_IPS=$(parse_wg_value "AllowedIPs" "$VPN_CONFIG_FILE")
+ENDPOINT=$(parse_wg_value "Endpoint" "$VPN_CONFIG_FILE")
+ADDRESS=$(parse_wg_value "Address" "$VPN_CONFIG_FILE")
+DNS=$(parse_wg_value "DNS" "$VPN_CONFIG_FILE")
+PERSISTENT_KEEPALIVE=$(parse_wg_value "PersistentKeepalive" "$VPN_CONFIG_FILE")
+
+# Default PersistentKeepalive to 25 if not set (recommended for NAT traversal)
+if [[ -z "$PERSISTENT_KEEPALIVE" ]]; then
+  PERSISTENT_KEEPALIVE=25
+fi
+
+# Validate required fields
+if [[ -z "$PRIVATE_KEY" ]] || [[ -z "$PUBLIC_KEY" ]] || [[ -z "$ENDPOINT" ]]; then
+  error "Invalid WireGuard config: missing PrivateKey, PublicKey, or Endpoint"
+fi
+
+# Update killswitch rules BEFORE connecting (if killswitch is active)
+# This must happen before connection attempt, otherwise killswitch blocks the new server
+load_config "$USER_CONFIG_FILE"
+if [[ "${KILLSWITCH:-false}" == "true" ]]; then
+  echo ""
+  info "Updating killswitch rules for new server endpoint..."
+
+  # Temporarily update LAST_CONNECTED_SERVER so lazyvpn-update-killswitch uses the new server
+  if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_FILE"; then
+    warn "Failed to update server name in config"
+  fi
+
+  # Update killswitch rules to allow the new endpoint
+  if lazyvpn-update-killswitch; then
+    info "✓ Killswitch rules updated for new endpoint"
+  else
+    warn "Failed to update killswitch rules"
+    warn "Connection may fail - consider disabling killswitch temporarily"
+  fi
+  echo ""
+fi
+
+# Create the .netdev file
+NETDEV_FILE="/etc/systemd/network/99-${CONN_NAME}.netdev"
+info "Creating netdev file: $NETDEV_FILE"
+
+cat << EOF | sudo tee "$NETDEV_FILE" > /dev/null
+[NetDev]
+Name=$CONN_NAME
+Kind=wireguard
+Description=WireGuard VPN tunnel
+
+[WireGuard]
+PrivateKey=$PRIVATE_KEY
+
+[WireGuardPeer]
+PublicKey=$PUBLIC_KEY
+AllowedIPs=$ALLOWED_IPS
+Endpoint=$ENDPOINT
+PersistentKeepalive=$PERSISTENT_KEEPALIVE
+EOF
+
+# Create the .network file
+NETWORK_FILE="/etc/systemd/network/99-${CONN_NAME}.network"
+info "Creating network file: $NETWORK_FILE"
+
+cat << EOF | sudo tee "$NETWORK_FILE" > /dev/null
+[Match]
+Name=$CONN_NAME
+
+[Network]
+Address=$ADDRESS
+DNS=$DNS
+DNSDefaultRoute=true
+Domains=~.
+EOF
+
+# Restart systemd-networkd to apply changes
+info "Restarting systemd-networkd..."
+sudo systemctl restart systemd-networkd
+
+# Bring up the interface
+info "Connecting to $SERVER_DISPLAY..."
+if ! sudo networkctl up "$CONN_NAME"; then
+  error "Failed to connect to $SERVER_DISPLAY"
+fi
+
+# Wait a moment for interface to initialize
+sleep 2
+
+# Add routes to send all traffic through VPN (based on AllowedIPs)
+info "Configuring routes..."
+
+# Get VPN endpoint IP to preserve connectivity to it
+VPN_ENDPOINT_IP=$(echo "$ENDPOINT" | cut -d: -f1)
+
+# Get current default gateway to preserve route to VPN endpoint
+DEFAULT_GW=$(ip route show default | awk '/default/ {print $3}' | head -n1)
+DEFAULT_DEV=$(ip route show default | awk '/default/ {print $5}' | head -n1)
+
+if [[ -n "$DEFAULT_GW" ]] && [[ -n "$VPN_ENDPOINT_IP" ]]; then
+  # Add specific route to VPN endpoint through original gateway
+  sudo ip route add "$VPN_ENDPOINT_IP/32" via "$DEFAULT_GW" dev "$DEFAULT_DEV" 2>/dev/null || true
+fi
+
+# Add default route through VPN interface with lower metric (preferred over existing default)
+sudo ip route add default dev "$CONN_NAME" metric 100 2>/dev/null || warn "Route configuration may need adjustment"
+
+# Update last connected server in config (atomic)
+if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_FILE"; then
+  warn "Connected successfully but failed to save server name to config"
+  warn "Autoconnect 'last_used' mode may not work correctly"
+fi
+
+info "Successfully connected to $SERVER_DISPLAY"
+
+# Verify internet connectivity with retry logic
+# Try immediately first, only add delay if needed
+PING_SUCCESS=false
+for attempt in 1 2 3 4 5; do
+  if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+    PING_SUCCESS=true
+    break
+  fi
+  # If ping failed and we have retries left, wait before trying again
+  if [[ $attempt -lt 5 ]]; then
+    sleep 1
+  fi
+done
+
+if [[ "$PING_SUCCESS" == "true" ]]; then
+  # Try to get public IPv4
+  PUBLIC_IP=$(curl -4 -s --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null)
+
+  if [[ -n "$PUBLIC_IP" ]] && [[ "$PUBLIC_IP" != "Unknown" ]]; then
+    info "Public IPv4: $PUBLIC_IP"
+  else
+    info "Public IPv4: Unable to retrieve (but connection is active)"
+  fi
+
+  # Check IPv6 leak protection
+  load_config "$USER_CONFIG_FILE"
+  if [[ "${DISABLE_IPV6:-true}" == "true" ]]; then
+    # Test for IPv6 connectivity (should fail if properly disabled)
+    PUBLIC_IPV6=$(curl -6 -s --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null)
+    if [[ -n "$PUBLIC_IPV6" ]]; then
+      warn "⚠️  IPv6 leak detected: $PUBLIC_IPV6"
+      warn "Your IPv6 address may be exposed. Consider disabling IPv6 systemwide."
+    else
+      info "✓ IPv6 properly disabled/blocked"
+    fi
+  else
+    # IPv6 enabled - check if it goes through VPN
+    PUBLIC_IPV6=$(curl -6 -s --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null)
+    if [[ -n "$PUBLIC_IPV6" ]]; then
+      info "Public IPv6: $PUBLIC_IPV6"
+    fi
+  fi
+
+  # Quick DNS leak check
+  if command -v resolvectl &>/dev/null; then
+    ACTIVE_DNS=$(resolvectl status "$CONN_NAME" 2>/dev/null | grep "DNS Servers" | awk '{print $3}')
+    if [[ -n "$ACTIVE_DNS" ]]; then
+      if [[ "$ACTIVE_DNS" == "$DNS" ]]; then
+        info "✓ DNS: $ACTIVE_DNS (via VPN)"
+      else
+        warn "⚠️  DNS mismatch - Expected: $DNS, Active: $ACTIVE_DNS"
+      fi
+    fi
+  fi
+else
+  warn "Connection established but no internet access detected"
+  warn "This may indicate a routing or DNS issue"
+fi

@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# Rename the systemd-networkd VPN interface
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# Load current configuration
+load_config "$CONFIG_FILE"
+CURRENT_NAME="${CONNECTION_NAME:-wg0}"
+
+info "Current interface name: $CURRENT_NAME"
+echo ""
+echo "Enter new interface name (or press Enter to cancel):"
+read -r -p "New name: " NEW_NAME
+
+# Check if user cancelled
+if [[ -z "$NEW_NAME" ]]; then
+  info "Cancelled"
+  exit 0
+fi
+
+# Validate new name
+if [[ ! "$NEW_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  error "Invalid interface name. Only alphanumeric characters, dash, underscore, and dot allowed."
+fi
+
+# Check if name is the same
+if [[ "$NEW_NAME" == "$CURRENT_NAME" ]]; then
+  info "Name is already $NEW_NAME"
+  exit 0
+fi
+
+info "Renaming interface from '$CURRENT_NAME' to '$NEW_NAME'..."
+
+# If currently connected, rename the systemd-networkd files
+# This requires sudo since the files are in /etc/systemd/network/
+NETDEV_FILE="/etc/systemd/network/99-${CURRENT_NAME}.netdev"
+NETWORK_FILE="/etc/systemd/network/99-${CURRENT_NAME}.network"
+
+if [[ -f "$NETDEV_FILE" ]] || [[ -f "$NETWORK_FILE" ]]; then
+  info "Renaming systemd-networkd configuration files..."
+
+  # Need to disconnect first to safely rename
+  if is_connected "$CURRENT_NAME"; then
+    info "Disconnecting to rename files..."
+    lazyvpn-disconnect
+  fi
+
+  # Rename the files (requires sudo)
+  if [[ -f "$NETDEV_FILE" ]]; then
+    if ! sudo mv "$NETDEV_FILE" "/etc/systemd/network/99-${NEW_NAME}.netdev"; then
+      error "Failed to rename .netdev file (check sudo permissions)"
+    fi
+    # Update the Name field in the file
+    sudo sed -i "s/^Name=.*/Name=$NEW_NAME/" "/etc/systemd/network/99-${NEW_NAME}.netdev"
+  fi
+
+  if [[ -f "$NETWORK_FILE" ]]; then
+    if ! sudo mv "$NETWORK_FILE" "/etc/systemd/network/99-${NEW_NAME}.network"; then
+      error "Failed to rename .network file (check sudo permissions)"
+    fi
+    # Update the Name field in the file
+    sudo sed -i "s/^Name=.*/Name=$NEW_NAME/" "/etc/systemd/network/99-${NEW_NAME}.network"
+  fi
+
+  # Restart systemd-networkd to apply changes
+  sudo systemctl restart systemd-networkd
+  info "Updated systemd-networkd configuration"
+fi
+
+# Update config file atomically
+if ! atomic_config_update "CONNECTION_NAME" "$NEW_NAME" "$CONFIG_FILE"; then
+  error "Failed to update interface name in config file"
+fi
+
+info "Interface renamed successfully to: $NEW_NAME"
+info "This will be used for all future VPN connections"

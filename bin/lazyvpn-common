@@ -1,0 +1,356 @@
+#!/bin/bash
+
+# LazyVPN Common Functions Library (systemd-networkd version)
+# Source this file in all lazyvpn scripts
+
+# Error handling functions
+error() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+warn() {
+    echo "Warning: $*" >&2
+}
+
+info() {
+    echo "$*"
+}
+
+# Send notification (dismisses old LazyVPN notifications first to avoid spam)
+notify() {
+    omarchy-notification-dismiss "LazyVPN" 2>/dev/null || true
+    notify-send "LazyVPN" "$1"
+}
+
+# Validate config file exists and is readable
+validate_config() {
+    local config_file="$1"
+
+    # Check if config exists
+    if [[ ! -f "$config_file" ]]; then
+        return 1
+    fi
+
+    # Check if config is readable and has required fields
+    if ! grep -q "^CONNECTION_NAME=" "$config_file" 2>/dev/null; then
+        return 1
+    fi
+
+    # Check if file is valid bash syntax
+    if ! bash -n "$config_file" 2>/dev/null; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Atomic config update
+atomic_config_update() {
+    local key="$1"
+    local value="$2"
+    local config_file="$3"
+
+    # Validate inputs
+    if [[ -z "$key" ]] || [[ -z "$config_file" ]]; then
+        warn "atomic_config_update requires key and config_file"
+        return 1
+    fi
+
+    # Create updated config in temp file
+    if [[ -f "$config_file" ]]; then
+        # Check if key exists, update or append
+        if grep -q "^${key}=" "$config_file" 2>/dev/null; then
+            # Update existing line
+            if ! sed "s|^${key}=.*|${key}=${value}|" "$config_file" > "${config_file}.tmp"; then
+                warn "Failed to update config (sed failed)"
+                rm -f "${config_file}.tmp"
+                return 1
+            fi
+        else
+            # Key doesn't exist, append it
+            cp "$config_file" "${config_file}.tmp" || return 1
+            echo "${key}=${value}" >> "${config_file}.tmp"
+        fi
+    else
+        # Create new config with just this key
+        echo "${key}=${value}" > "${config_file}.tmp"
+    fi
+
+    # Validate the temp file is valid bash
+    if ! bash -n "${config_file}.tmp" 2>/dev/null; then
+        warn "Generated config has invalid syntax - this is a bug"
+        rm -f "${config_file}.tmp"
+        return 1
+    fi
+
+    # Atomic move
+    if ! mv "${config_file}.tmp" "$config_file"; then
+        echo "╔════════════════════════════════════════════════════════╗" >&2
+        echo "║ CRITICAL: Failed to update configuration               ║" >&2
+        echo "╠════════════════════════════════════════════════════════╣" >&2
+        echo "║ Could not write to: $config_file                       ║" >&2
+        echo "║                                                        ║" >&2
+        echo "║ Possible causes:                                       ║" >&2
+        echo "║   - Disk full                                          ║" >&2
+        echo "║   - Permission denied                                  ║" >&2
+        echo "║   - Filesystem error                                   ║" >&2
+        echo "║                                                        ║" >&2
+        echo "║ Check: df -h $(dirname "$config_file")                 ║" >&2
+        echo "║ Check: ls -la $config_file                             ║" >&2
+        echo "╚════════════════════════════════════════════════════════╝" >&2
+        rm -f "${config_file}.tmp"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check if VPN is connected
+is_connected() {
+    local conn_name="$1"
+
+    # Check if interface exists and is up
+    if ! networkctl status "$conn_name" &>/dev/null; then
+        return 1
+    fi
+
+    # Check if interface has state "routable" or "degraded" (degraded means up but DNS might not work)
+    local state
+    state=$(networkctl status "$conn_name" 2>/dev/null | grep -E "^\s*State:" | awk '{print $2}')
+
+    if [[ "$state" == "routable" ]] || [[ "$state" == "degraded" ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Interactive config recovery
+recover_config() {
+    local config_file="$1"
+
+    echo "════════════════════════════════════════════════════════"
+    echo "⚠️  Configuration file is missing or corrupted"
+    echo "════════════════════════════════════════════════════════"
+    echo ""
+    echo "Let's recreate it. I'll ask you a few questions..."
+    echo ""
+
+    # Question 1: Connection name
+    echo "1. What should the systemd-networkd connection be named?"
+    echo "   (This is the interface name, default: wg0)"
+    read -r -p "   Connection name [wg0]: " conn_name
+    conn_name="${conn_name:-wg0}"
+
+    # Validate
+    if [[ ! "$conn_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "   Invalid name. Using default: wg0"
+        conn_name="wg0"
+    fi
+
+    # Question 2: Killswitch
+    echo ""
+    echo "2. Enable killswitch (block internet if VPN drops)?"
+    read -r -p "   [y/N]: " killswitch
+    [[ "${killswitch,,}" == "y" ]] && killswitch="true" || killswitch="false"
+
+    # Question 3: Allow local network
+    echo ""
+    echo "3. Allow local network access when killswitch is enabled?"
+    read -r -p "   [Y/n]: " allow_local
+    [[ "${allow_local,,}" == "n" ]] && allow_local="false" || allow_local="true"
+
+    # Question 4: Autostart
+    echo ""
+    echo "4. Auto-start LazyVPN on boot?"
+    read -r -p "   [y/N]: " autostart
+    [[ "${autostart,,}" == "y" ]] && autostart="true" || autostart="false"
+
+    # Question 5: Autoconnect
+    echo ""
+    echo "5. Auto-connect to VPN on boot?"
+    read -r -p "   [y/N]: " autoconnect
+    [[ "${autoconnect,,}" == "y" ]] && autoconnect="true" || autoconnect="false"
+
+    # Question 6: Autoconnect mode (if enabled)
+    autoconnect_mode="last_used"
+    autoconnect_server=""
+    if [[ "$autoconnect" == "true" ]]; then
+        echo ""
+        echo "6. Which server should auto-connect use?"
+        echo "   1) Last used server"
+        echo "   2) Quickest (lowest latency)"
+        echo "   3) Random"
+        read -r -p "   Choice [1]: " mode_choice
+
+        case "$mode_choice" in
+            2) autoconnect_mode="quickest" ;;
+            3) autoconnect_mode="random" ;;
+            *) autoconnect_mode="last_used" ;;
+        esac
+    fi
+
+    # Create config atomically
+    echo ""
+    echo "Creating configuration..."
+
+    cat > "${config_file}.tmp" << EOF
+# LazyVPN Configuration
+CONNECTION_NAME=$conn_name
+KILLSWITCH=$killswitch
+ALLOW_LOCAL_NETWORK=$allow_local
+KILLSWITCH_AUTO_DISABLE=true
+AUTOSTART=$autostart
+AUTOCONNECT=$autoconnect
+AUTOCONNECT_MODE=$autoconnect_mode
+AUTOCONNECT_SERVER=$autoconnect_server
+LAST_CONNECTED_SERVER=
+EOF
+
+    # Atomic move
+    if ! mv "${config_file}.tmp" "$config_file"; then
+        echo "❌ Error: Failed to create config file"
+        echo "   Check permissions on: $(dirname "$config_file")"
+        rm -f "${config_file}.tmp"
+        return 1
+    fi
+
+    echo "✅ Configuration created successfully"
+    echo ""
+    return 0
+}
+
+# Load and validate config
+load_config() {
+    local config_file="${1:-$HOME/.config/lazyvpn/config}"
+
+    # If config doesn't exist or is invalid, run init to fix it
+    if ! validate_config "$config_file"; then
+        warn "Config missing or incomplete, running lazyvpn-init..."
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        "$script_dir/lazyvpn-init" >/dev/null 2>&1
+    fi
+
+    # Source the config
+    # shellcheck source=/dev/null
+    source "$config_file" || error "Failed to load config"
+
+    # Set defaults for any missing values
+    CONNECTION_NAME="${CONNECTION_NAME:-wg0}"
+    KILLSWITCH="${KILLSWITCH:-false}"
+    ALLOW_LOCAL_NETWORK="${ALLOW_LOCAL_NETWORK:-true}"
+    KILLSWITCH_AUTO_DISABLE="${KILLSWITCH_AUTO_DISABLE:-true}"
+    DISABLE_IPV6="${DISABLE_IPV6:-true}"
+    AUTOSTART="${AUTOSTART:-false}"
+    AUTOCONNECT="${AUTOCONNECT:-false}"
+    AUTOCONNECT_MODE="${AUTOCONNECT_MODE:-quickest}"
+    AUTOCONNECT_SERVER="${AUTOCONNECT_SERVER:-}"
+    LAST_CONNECTED_SERVER="${LAST_CONNECTED_SERVER:-}"
+    AUTO_RECOVER="${AUTO_RECOVER:-true}"
+    AUTO_FAILOVER="${AUTO_FAILOVER:-false}"
+}
+
+# Convert country code to flag emoji
+country_flag() {
+    local code="$1"
+    # Convert country code to flag emoji using regional indicator symbols
+    # Simple lookup table for A-Z to avoid printf issues
+    declare -A flags=(
+        [A]="🇦" [B]="🇧" [C]="🇨" [D]="🇩" [E]="🇪" [F]="🇫" [G]="🇬" [H]="🇭"
+        [I]="🇮" [J]="🇯" [K]="🇰" [L]="🇱" [M]="🇲" [N]="🇳" [O]="🇴" [P]="🇵"
+        [Q]="🇶" [R]="🇷" [S]="🇸" [T]="🇹" [U]="🇺" [V]="🇻" [W]="🇼" [X]="🇽"
+        [Y]="🇾" [Z]="🇿"
+    )
+
+    local flag=""
+    for (( i=0; i<${#code}; i++ )); do
+        local char="${code:$i:1}"
+        # Convert to uppercase
+        local upper
+        upper=$(echo "$char" | tr '[:lower:]' '[:upper:]')
+        # Lookup emoji
+        flag+="${flags[$upper]}"
+    done
+    echo "$flag"
+}
+
+# Record performance data
+record_performance() {
+    local server="$1"
+    local type="$2"        # "speed" or "latency"
+    local value="$3"       # numeric value
+    local status="$4"      # "ok" or "failed"
+    local config_dir="${5:-$HOME/.config/lazyvpn}"
+
+    local perf_dir="$config_dir/performance"
+    mkdir -p "$perf_dir"
+
+    local perf_file="$perf_dir/${server}.log"
+    local timestamp=$(date +%s)
+
+    # Append performance data: timestamp|type|value|status
+    echo "$timestamp|$type|$value|$status" >> "$perf_file"
+
+    # Keep log size reasonable (max 100 entries per server)
+    if [[ -f "$perf_file" ]]; then
+        line_count=$(wc -l < "$perf_file")
+        if [[ $line_count -gt 100 ]]; then
+            tail -n 100 "$perf_file" > "$perf_file.tmp"
+            mv "$perf_file.tmp" "$perf_file"
+        fi
+    fi
+}
+
+# Get pretty formatted server name: "🇸🇪 SE #130 - ProtonVPN"
+get_pretty_server_name() {
+    local server_name="$1"
+    local script_dir="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+
+    # Get server info
+    local info_output
+    info_output=$("$script_dir/lazyvpn-get-server-info" "$server_name" 2>/dev/null)
+
+    if [[ -z "$info_output" ]]; then
+        # Fallback to plain name if info fetch fails
+        echo "$server_name"
+        return
+    fi
+
+    local country city number provider
+    country=$(echo "$info_output" | grep "^country=" | cut -d= -f2)
+    city=$(echo "$info_output" | grep "^city=" | cut -d= -f2)
+    number=$(echo "$info_output" | grep "^number=" | cut -d= -f2)
+    provider=$(echo "$info_output" | grep "^provider=" | cut -d= -f2)
+
+    # Build pretty name
+    local pretty_name=""
+
+    # Add flag if country is known
+    if [[ -n "$country" ]] && [[ "$country" != "Unknown" ]]; then
+        local flag
+        flag=$(country_flag "$country")
+        pretty_name="$flag $country"
+    else
+        pretty_name="$server_name"
+        return
+    fi
+
+    # Add city if available
+    if [[ -n "$city" ]]; then
+        pretty_name="$pretty_name-$city"
+    fi
+
+    # Add server number if available
+    if [[ -n "$number" ]]; then
+        pretty_name="$pretty_name #$number"
+    fi
+
+    # Add provider if known
+    if [[ -n "$provider" ]]; then
+        pretty_name="$pretty_name - $provider"
+    fi
+
+    echo "$pretty_name"
+}

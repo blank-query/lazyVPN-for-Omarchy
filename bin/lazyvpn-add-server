@@ -1,0 +1,237 @@
+#!/bin/bash
+
+# Add VPN server configs using fzf file picker
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+WG_DIR="$CONFIG_DIR/wireguard"
+DOWNLOADS_DIR="$HOME/Downloads"
+
+# Check if Downloads directory exists
+if [[ ! -d "$DOWNLOADS_DIR" ]]; then
+  echo "Error: Downloads directory not found: $DOWNLOADS_DIR"
+  exit 1
+fi
+
+# Check if any .conf files exist in Downloads
+if [[ -z "$(find "$DOWNLOADS_DIR" -type f -name "*.conf" 2>/dev/null)" ]]; then
+  echo "No .conf files found in: $DOWNLOADS_DIR"
+  echo ""
+  echo "Please download WireGuard configs from your VPN provider first."
+  exit 0
+fi
+
+# Helper function to parse config values (same as in lazyvpn-connect)
+parse_wg_value() {
+  local key="$1"
+  local file="$2"
+  # Match key (case-insensitive), optional spaces, =, optional spaces, value, strip comments
+  grep -i "^${key}" "$file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r'
+}
+
+# Validate WireGuard config file
+validate_config() {
+  local conf_file="$1"
+
+  local private_key
+  local public_key
+  local endpoint
+
+  private_key=$(parse_wg_value "PrivateKey" "$conf_file")
+  public_key=$(parse_wg_value "PublicKey" "$conf_file")
+  endpoint=$(parse_wg_value "Endpoint" "$conf_file")
+
+  if [[ -n "$private_key" ]] && [[ -n "$public_key" ]] && [[ -n "$endpoint" ]]; then
+    return 0  # Valid
+  else
+    return 1  # Invalid
+  fi
+}
+
+# Build list with provider detection and validation for fzf
+echo "Validating and detecting providers..."
+TEMP_LIST=$(mktemp)
+trap 'rm -f "$TEMP_LIST"' EXIT
+
+while IFS= read -r conf_file; do
+  filename=$(basename "$conf_file")
+  filename_no_ext=$(basename "$conf_file" .conf)
+
+  # Check if this file already exists in WG_DIR
+  is_duplicate=false
+  if [[ -f "$WG_DIR/$filename" ]]; then
+    is_duplicate=true
+  fi
+
+  # Validate config file
+  if validate_config "$conf_file"; then
+    validation_status="✓ VALID"
+  else
+    validation_status="✗ INVALID"
+  fi
+
+  # Detect provider from DNS field (quick method)
+  dns=$(grep -m1 "^DNS" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+  provider=""
+
+  case "$dns" in
+    10.2.0.1) provider="ProtonVPN" ;;
+    10.64.0.1|193.138.218.74) provider="Mullvad" ;;
+    172.16.0.1) provider="IVPN" ;;
+    10.0.0.241|10.0.0.242) provider="PIA" ;;
+  esac
+
+  # Also check for provider in comments if DNS detection failed
+  if [[ -z "$provider" ]]; then
+    if grep -qi "protonvpn" "$conf_file"; then
+      provider="ProtonVPN"
+    elif grep -qi "mullvad" "$conf_file"; then
+      provider="Mullvad"
+    elif grep -qi "ivpn" "$conf_file"; then
+      provider="IVPN"
+    fi
+  fi
+
+  # Parse filename for country, city, number
+  # Expected patterns: wg-XX-YY, wg-XX#123, proton-XX-YY#123, etc.
+  country=""
+  city=""
+  number=""
+
+  # Remove common prefixes
+  parsed_name="$filename_no_ext"
+  parsed_name="${parsed_name#wg-}"
+  parsed_name="${parsed_name#proton-}"
+  parsed_name="${parsed_name#mullvad-}"
+
+  # Extract number if present (#123 or -123)
+  if [[ "$parsed_name" =~ \#([0-9]+) ]]; then
+    number="${BASH_REMATCH[1]}"
+    parsed_name="${parsed_name%%#*}"
+  elif [[ "$parsed_name" =~ -([0-9]+)$ ]]; then
+    number="${BASH_REMATCH[1]}"
+    parsed_name="${parsed_name%-*}"
+  fi
+
+  # Parse country-city pattern (XX-YY format)
+  if [[ "$parsed_name" =~ ^([A-Z]{2})-([A-Z]{2,})$ ]]; then
+    country="${BASH_REMATCH[1]}"
+    city="${BASH_REMATCH[2]}"
+  elif [[ "$parsed_name" =~ ^([A-Z]{2})$ ]]; then
+    country="${BASH_REMATCH[1]}"
+  fi
+
+  # Build pretty name
+  pretty_name=""
+  if [[ -n "$country" ]]; then
+    flag=$(country_flag "$country")
+    pretty_name="$flag $country"
+    if [[ -n "$city" ]]; then
+      pretty_name="$pretty_name-$city"
+    fi
+    if [[ -n "$number" ]]; then
+      pretty_name="$pretty_name #$number"
+    fi
+    if [[ -n "$provider" ]]; then
+      pretty_name="$pretty_name - $provider"
+    fi
+  else
+    # Fallback: show filename with provider if known
+    if [[ -n "$provider" ]]; then
+      pretty_name="$filename_no_ext - $provider"
+    else
+      pretty_name="$filename_no_ext"
+    fi
+  fi
+
+  # Format: display name|full path|validation_status|is_duplicate
+  echo "$pretty_name|$conf_file|$validation_status|$is_duplicate" >> "$TEMP_LIST"
+done < <(find "$DOWNLOADS_DIR" -type f -name "*.conf" 2>/dev/null)
+
+# Create preview script
+PREVIEW_SCRIPT=$(mktemp)
+cat > "$PREVIEW_SCRIPT" <<'PREVIEW_EOF'
+#!/bin/bash
+# Parse the selected line
+IFS='|' read -r display_name file_path validation_status is_duplicate <<< "$1"
+
+echo "════════════════════════════════════════════════════════════"
+echo "Status:"
+echo "  Validation: $validation_status"
+if [[ "$is_duplicate" == "true" ]]; then
+  echo "  ⚠ DUPLICATE - Already exists in LazyVPN"
+fi
+echo "════════════════════════════════════════════════════════════"
+echo ""
+head -20 "$file_path"
+PREVIEW_EOF
+chmod +x "$PREVIEW_SCRIPT"
+
+# Use fzf with formatted list and custom preview
+echo ""
+echo "Select WireGuard configs to add:"
+echo "  • Tab         - Select/deselect individual configs"
+echo "  • Ctrl+A      - Select/deselect all configs"
+echo "  • Enter       - Confirm selection"
+echo ""
+echo "Note: Only VALID configs will be added. INVALID and DUPLICATE configs will be skipped."
+echo ""
+
+SELECTED=$(cat "$TEMP_LIST" | fzf --multi --prompt="Select configs: " --delimiter='|' --with-nth=1 --preview="$PREVIEW_SCRIPT {}" --height=80% --ansi --bind='ctrl-a:toggle-all')
+
+# Clean up preview script
+rm -f "$PREVIEW_SCRIPT"
+
+# If no files selected (user cancelled)
+if [[ -z "$SELECTED" ]]; then
+  echo "Cancelled - no files selected"
+  exit 0
+fi
+
+# Process selected files
+echo ""
+echo "Processing selected files..."
+COPIED=0
+SKIPPED_INVALID=0
+SKIPPED_DUPLICATE=0
+
+while IFS='|' read -r display_name file_path validation_status is_duplicate; do
+  filename=$(basename "$file_path" .conf)
+
+  # Skip if duplicate
+  if [[ "$is_duplicate" == "true" ]]; then
+    echo "  ⚠ Skipped (already exists): $filename"
+    ((SKIPPED_DUPLICATE++))
+  # Skip if invalid
+  elif [[ "$validation_status" != "✓ VALID" ]]; then
+    echo "  ✗ Skipped (invalid): $filename"
+    ((SKIPPED_INVALID++))
+  # Copy if valid and not duplicate
+  else
+    cp "$file_path" "$WG_DIR/"
+    # Show pretty name for what was copied
+    pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
+    echo "  ✓ Copied: $pretty_name"
+    ((COPIED++))
+  fi
+done <<< "$SELECTED"
+
+echo ""
+if [[ $COPIED -gt 0 ]]; then
+  echo "Successfully added $COPIED server config(s)"
+fi
+if [[ $SKIPPED_DUPLICATE -gt 0 ]]; then
+  echo "Skipped $SKIPPED_DUPLICATE duplicate config(s) (already in LazyVPN)"
+fi
+if [[ $SKIPPED_INVALID -gt 0 ]]; then
+  echo "Skipped $SKIPPED_INVALID invalid config(s)"
+  echo ""
+  echo "Invalid configs are missing required fields:"
+  echo "  - PrivateKey"
+  echo "  - PublicKey"
+  echo "  - Endpoint"
+fi
