@@ -137,8 +137,8 @@
 
 1.  **Clone the Repository**:
     ```bash
-    git clone https://github.com/blank-query/lazyvpn.git
-    cd lazyvpn
+    git clone https://github.com/blank-query/lazyVPN-for-Omarchy.git
+    cd lazyVPN-for-Omarchy
     ```
 
 2.  **Run the Installer**:
