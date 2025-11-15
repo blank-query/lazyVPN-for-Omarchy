@@ -1,0 +1,199 @@
+#!/bin/bash
+
+# Test latency to all VPN servers
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+WG_DIR="$CONFIG_DIR/wireguard"
+
+# Check if killswitch is active and we're disconnected
+load_config "$CONFIG_FILE"
+if [[ "$KILLSWITCH" == "true" ]] && ! is_connected "${CONNECTION_NAME:-wg0}"; then
+  cat << 'EOF'
+
+╔════════════════════════════════════════════════════════════╗
+║ Latency Test Unavailable                                   ║
+╠════════════════════════════════════════════════════════════╣
+║ Latency testing requires pinging all servers to measure    ║
+║ response time.                                             ║
+║                                                            ║
+║ The killswitch is currently blocking all internet traffic  ║
+║ (you are disconnected from VPN).                           ║
+║                                                            ║
+║ To run latency tests:                                      ║
+║   • Disable the killswitch first                           ║
+╚════════════════════════════════════════════════════════════╝
+
+EOF
+  read -r -p "Press Enter to continue..."
+  exit 0
+fi
+
+if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
+  notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+  echo "Error: No WireGuard configurations found in $WG_DIR"
+  exit 1
+fi
+
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║ VPN Server Latency Test                                    ║"
+echo "╠════════════════════════════════════════════════════════════╣"
+echo "║ This will test latency to all VPN servers by pinging       ║"
+echo "║ their endpoints.                                           ║"
+echo "║                                                            ║"
+echo "║ Process:                                                   ║"
+echo "║   • Ping each server endpoint (3 packets)                  ║"
+echo "║   • Measure average response time                          ║"
+echo "║   • Display results sorted by latency                      ║"
+echo "║                                                            ║"
+echo "║ Note: Tests run in parallel for speed.                     ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+read -r -p "Continue with latency test? [y/N] " response
+if [[ ! "$response" =~ ^[Yy]$ ]]; then
+  echo "Latency test cancelled"
+  exit 0
+fi
+
+echo ""
+read -r -p "Include non-VPN connection in results for comparison? [y/N] " include_direct
+TEST_DIRECT=false
+if [[ "$include_direct" =~ ^[Yy]$ ]]; then
+  TEST_DIRECT=true
+fi
+
+echo ""
+
+# Store original connection state
+ORIGINAL_CONN=""
+if is_connected "${CONNECTION_NAME:-wg0}"; then
+  ORIGINAL_CONN=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" | cut -d= -f2)
+fi
+
+# Test non-VPN connection if requested
+if [[ "$TEST_DIRECT" == "true" ]]; then
+  echo "Testing non-VPN connection..."
+  echo ""
+
+  # Make sure we're disconnected
+  if is_connected "${CONNECTION_NAME:-wg0}"; then
+    info "Disconnecting from VPN to test direct connection..."
+    lazyvpn-disconnect >/dev/null 2>&1
+    sleep 2
+  fi
+
+  # Test latency to a public DNS server (8.8.8.8)
+  info "Pinging public DNS (8.8.8.8)..."
+  direct_latency=$(LC_ALL=C ping -c 3 -W 2 8.8.8.8 2>/dev/null | awk '/^rtt/ {split($4,a,"/"); print int(a[2])}')
+
+  if [[ -n "$direct_latency" ]] && [[ "$direct_latency" =~ ^[0-9]+$ ]]; then
+    info "✓ Latency: ${direct_latency}ms"
+    # Record to performance history
+    record_performance "DIRECT" "latency" "$direct_latency" "ok"
+  else
+    info "✗ Ping failed"
+    record_performance "DIRECT" "latency" "0" "failed"
+  fi
+
+  echo ""
+  sleep 2
+fi
+
+echo "Testing server latency (parallel)..."
+echo ""
+
+RESULTS_DIR=$(mktemp -d)
+trap 'rm -rf "$RESULTS_DIR"' EXIT
+
+# Test a single server (runs in background)
+test_server() {
+  local conf="$1"
+  local results_dir="$2"
+
+  local filename
+  filename=$(basename "$conf" .conf)
+  local result_file="$results_dir/$filename"
+
+  # Extract endpoint IP
+  local endpoint
+  endpoint=$(grep -m1 "^Endpoint" "$conf" | cut -d= -f2 | tr -d ' ')
+  local server_ip
+  server_ip=$(echo "$endpoint" | cut -d: -f1)
+
+  # Ping the server (3 packets, 2 second timeout)
+  local avg_latency
+  avg_latency=$(LC_ALL=C ping -c 3 -W 2 "$server_ip" 2>/dev/null | awk '/^rtt/ {split($4,a,"/"); print int(a[2])}')
+
+  if [[ -n "$avg_latency" ]] && [[ "$avg_latency" =~ ^[0-9]+$ ]]; then
+    echo "${avg_latency}" > "$result_file"
+    echo "  ✓ $filename: ${avg_latency}ms"
+
+    # Record performance data
+    record_performance "$filename" "latency" "$avg_latency" "ok"
+  else
+    echo "  ✗ $filename: timeout"
+
+    # Record failed performance data
+    record_performance "$filename" "latency" "0" "failed"
+  fi
+}
+
+# Launch all tests in parallel
+for conf in "$WG_DIR"/*.conf; do
+  [[ -f "$conf" ]] || continue
+  test_server "$conf" "$RESULTS_DIR" &
+done
+
+# Wait for all background jobs
+wait
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════════════════════════"
+echo "Results (sorted by latency):"
+echo "═══════════════════════════════════════════════════════════════════════════════════"
+printf "%-50s %15s\n" "Server" "Latency"
+echo "───────────────────────────────────────────────────────────────────────────────────"
+
+# Collect and sort results
+SORTED_RESULTS=$(mktemp)
+
+for result_file in "$RESULTS_DIR"/*; do
+  [[ -f "$result_file" ]] || continue
+
+  filename=$(basename "$result_file")
+  latency=$(cat "$result_file")
+
+  if [[ -n "$latency" ]] && [[ "$latency" =~ ^[0-9]+$ ]]; then
+    pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
+    # Format: latency|server_name for sorting
+    echo "${latency}|${pretty_name}" >> "$SORTED_RESULTS"
+  fi
+done
+
+# Sort by latency (numeric) and display
+if [[ -s "$SORTED_RESULTS" ]]; then
+  sort -t'|' -k1 -n "$SORTED_RESULTS" | while IFS='|' read -r latency server_name; do
+    printf "%-50s %12s ms\n" "$server_name" "$latency"
+  done
+else
+  echo "No servers responded to ping."
+fi
+
+rm -f "$SORTED_RESULTS"
+
+echo "═══════════════════════════════════════════════════════════════════════════════════"
+echo ""
+
+# Restore original connection if we disconnected for the direct test
+if [[ "$TEST_DIRECT" == "true" ]] && [[ -n "$ORIGINAL_CONN" ]]; then
+  info "Restoring original connection to $ORIGINAL_CONN..."
+  lazyvpn-connect "$ORIGINAL_CONN" >/dev/null 2>&1
+  echo ""
+fi

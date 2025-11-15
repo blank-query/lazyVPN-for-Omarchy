@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Disable firewall killswitch rules (requires sudo)
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_FILE="$HOME/.config/lazyvpn/config"
+
+# Update config file BEFORE running as root (so we can write to user's config)
+# Get the real user's home directory if running under sudo
+if [[ -n "$SUDO_USER" ]]; then
+  REAL_HOME=$(eval echo ~$SUDO_USER)
+  CONFIG_FILE="$REAL_HOME/.config/lazyvpn/config"
+fi
+
+# Update config to set KILLSWITCH=false
+if [[ -f "$CONFIG_FILE" ]]; then
+  # Run as the original user, not root
+  if [[ -n "$SUDO_USER" ]]; then
+    sudo -u "$SUDO_USER" bash -c "
+      source '$SCRIPT_DIR/lazyvpn-common'
+      atomic_config_update 'KILLSWITCH' 'false' '$CONFIG_FILE'
+    " 2>/dev/null || true
+  else
+    source "$SCRIPT_DIR/lazyvpn-common"
+    atomic_config_update "KILLSWITCH" "false" "$CONFIG_FILE" 2>/dev/null || true
+  fi
+fi
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+  exec sudo "$0" "$@"
+fi
+
+# Check if chains exist
+if ! iptables -L LAZYVPN_OUT -n &>/dev/null; then
+  warn "Killswitch chains not found (already disabled or not set up)"
+  exit 0
+fi
+
+# Flush rules and allow all traffic through
+iptables -F LAZYVPN_OUT
+ip6tables -F LAZYVPN_OUT
+
+# Add RETURN rule to allow all traffic
+iptables -A LAZYVPN_OUT -j RETURN
+ip6tables -A LAZYVPN_OUT -j RETURN
+
+echo "✓ Killswitch disabled"

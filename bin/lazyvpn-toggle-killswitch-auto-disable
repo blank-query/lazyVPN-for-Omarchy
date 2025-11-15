@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# Cycle through killswitch disconnect behavior: auto → prompt → never → auto
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_FILE="$HOME/.config/lazyvpn/config"
+
+# Load current config
+load_config "$CONFIG_FILE"
+
+# Default to true if not set (for backward compatibility)
+CURRENT_VALUE="${KILLSWITCH_AUTO_DISABLE:-true}"
+
+# Cycle through three values: true (auto) → false (prompt) → never → true (auto)
+case "$CURRENT_VALUE" in
+  true)
+    NEW_VALUE="false"
+    ;;
+  false)
+    NEW_VALUE="never"
+    ;;
+  never)
+    NEW_VALUE="true"
+    ;;
+  *)
+    # Unknown value, reset to default
+    NEW_VALUE="true"
+    ;;
+esac
+
+# Update config file atomically
+if ! atomic_config_update "KILLSWITCH_AUTO_DISABLE" "$NEW_VALUE" "$CONFIG_FILE"; then
+  error "Failed to update killswitch auto-disable setting in config"
+fi

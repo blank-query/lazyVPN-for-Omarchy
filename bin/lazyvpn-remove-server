@@ -1,0 +1,263 @@
+#!/bin/bash
+
+# Remove VPN server configs using fzf file picker
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+WG_DIR="$CONFIG_DIR/wireguard"
+PERF_DIR="$CONFIG_DIR/performance"
+
+# Check if wireguard directory exists
+if [[ ! -d "$WG_DIR" ]]; then
+  echo "Error: WireGuard directory not found: $WG_DIR"
+  exit 1
+fi
+
+# Check if any .conf files exist
+if [[ -z "$(find "$WG_DIR" -type f -name "*.conf" 2>/dev/null)" ]]; then
+  echo "No server configs found in: $WG_DIR"
+  echo ""
+  echo "Add servers first using 'Add New Server' option."
+  exit 0
+fi
+
+# Helper function to parse config values (same as in lazyvpn-connect)
+parse_wg_value() {
+  local key="$1"
+  local file="$2"
+  # Match key (case-insensitive), optional spaces, =, optional spaces, value, strip comments
+  grep -i "^${key}" "$file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r'
+}
+
+# Validate WireGuard config file
+validate_config() {
+  local conf_file="$1"
+
+  local private_key
+  local public_key
+  local endpoint
+
+  private_key=$(parse_wg_value "PrivateKey" "$conf_file")
+  public_key=$(parse_wg_value "PublicKey" "$conf_file")
+  endpoint=$(parse_wg_value "Endpoint" "$conf_file")
+
+  if [[ -n "$private_key" ]] && [[ -n "$public_key" ]] && [[ -n "$endpoint" ]]; then
+    return 0  # Valid
+  else
+    return 1  # Invalid
+  fi
+}
+
+# Get current connection status
+load_config "$CONFIG_FILE"
+CONNECTED_SERVER=""
+if is_connected "${CONNECTION_NAME:-wg0}"; then
+  CONNECTED_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2)
+fi
+
+# Build list with validation and connection status for fzf
+echo "Scanning installed servers..."
+TEMP_LIST=$(mktemp)
+trap 'rm -f "$TEMP_LIST"' EXIT
+
+while IFS= read -r conf_file; do
+  filename=$(basename "$conf_file")
+  filename_no_ext=$(basename "$conf_file" .conf)
+
+  # Check if this server is currently connected
+  is_connected_flag=false
+  if [[ "$filename_no_ext" == "$CONNECTED_SERVER" ]]; then
+    is_connected_flag=true
+  fi
+
+  # Validate config file
+  if validate_config "$conf_file"; then
+    validation_status="✓ VALID"
+  else
+    validation_status="✗ INVALID"
+  fi
+
+  # Detect provider from DNS field (quick method)
+  dns=$(grep -m1 "^DNS" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+  provider=""
+
+  case "$dns" in
+    10.2.0.1) provider="ProtonVPN" ;;
+    10.64.0.1|193.138.218.74) provider="Mullvad" ;;
+    172.16.0.1) provider="IVPN" ;;
+    10.0.0.241|10.0.0.242) provider="PIA" ;;
+  esac
+
+  # Also check for provider in comments if DNS detection failed
+  if [[ -z "$provider" ]]; then
+    if grep -qi "protonvpn" "$conf_file"; then
+      provider="ProtonVPN"
+    elif grep -qi "mullvad" "$conf_file"; then
+      provider="Mullvad"
+    elif grep -qi "ivpn" "$conf_file"; then
+      provider="IVPN"
+    fi
+  fi
+
+  # Parse filename for country, city, number
+  # Expected patterns: wg-XX-YY, wg-XX#123, proton-XX-YY#123, etc.
+  country=""
+  city=""
+  number=""
+
+  # Remove common prefixes
+  parsed_name="$filename_no_ext"
+  parsed_name="${parsed_name#wg-}"
+  parsed_name="${parsed_name#proton-}"
+  parsed_name="${parsed_name#mullvad-}"
+
+  # Extract number if present (#123 or -123)
+  if [[ "$parsed_name" =~ \#([0-9]+) ]]; then
+    number="${BASH_REMATCH[1]}"
+    parsed_name="${parsed_name%%#*}"
+  elif [[ "$parsed_name" =~ -([0-9]+)$ ]]; then
+    number="${BASH_REMATCH[1]}"
+    parsed_name="${parsed_name%-*}"
+  fi
+
+  # Parse country-city pattern (XX-YY format)
+  if [[ "$parsed_name" =~ ^([A-Z]{2})-([A-Z]{2,})$ ]]; then
+    country="${BASH_REMATCH[1]}"
+    city="${BASH_REMATCH[2]}"
+  elif [[ "$parsed_name" =~ ^([A-Z]{2})$ ]]; then
+    country="${BASH_REMATCH[1]}"
+  fi
+
+  # Build pretty name
+  pretty_name=""
+  if [[ -n "$country" ]]; then
+    flag=$(country_flag "$country")
+    pretty_name="$flag $country"
+    if [[ -n "$city" ]]; then
+      pretty_name="$pretty_name-$city"
+    fi
+    if [[ -n "$number" ]]; then
+      pretty_name="$pretty_name #$number"
+    fi
+    if [[ -n "$provider" ]]; then
+      pretty_name="$pretty_name - $provider"
+    fi
+  else
+    # Fallback: show filename with provider if known
+    if [[ -n "$provider" ]]; then
+      pretty_name="$filename_no_ext - $provider"
+    else
+      pretty_name="$filename_no_ext"
+    fi
+  fi
+
+  # Format: display name|full path|validation_status|is_connected
+  echo "$pretty_name|$conf_file|$validation_status|$is_connected_flag" >> "$TEMP_LIST"
+done < <(find "$WG_DIR" -type f -name "*.conf" 2>/dev/null)
+
+# Create preview script
+PREVIEW_SCRIPT=$(mktemp)
+cat > "$PREVIEW_SCRIPT" <<'PREVIEW_EOF'
+#!/bin/bash
+# Parse the selected line
+IFS='|' read -r display_name file_path validation_status is_connected <<< "$1"
+
+echo "════════════════════════════════════════════════════════════"
+echo "Status:"
+echo "  Validation: $validation_status"
+if [[ "$is_connected" == "true" ]]; then
+  echo "  🟢 CONNECTED - Cannot delete while connected"
+else
+  echo "  🔴 DISCONNECTED"
+fi
+echo "════════════════════════════════════════════════════════════"
+echo ""
+head -20 "$file_path"
+PREVIEW_EOF
+chmod +x "$PREVIEW_SCRIPT"
+
+# Use fzf with formatted list and custom preview
+echo ""
+echo "Select WireGuard configs to remove:"
+echo "  • Tab         - Select/deselect individual configs"
+echo "  • Ctrl+A      - Select/deselect all configs"
+echo "  • Enter       - Confirm selection"
+echo ""
+echo "Note: CONNECTED servers cannot be removed. Disconnect first."
+echo ""
+
+SELECTED=$(cat "$TEMP_LIST" | fzf --multi --prompt="Select configs to remove: " --delimiter='|' --with-nth=1 --preview="$PREVIEW_SCRIPT {}" --height=80% --ansi --bind='ctrl-a:toggle-all')
+
+# Clean up preview script
+rm -f "$PREVIEW_SCRIPT"
+
+# If no files selected (user cancelled)
+if [[ -z "$SELECTED" ]]; then
+  echo "Cancelled - no files selected"
+  exit 0
+fi
+
+# Process selected files
+echo ""
+echo "Processing selected files..."
+REMOVED=0
+SKIPPED_CONNECTED=0
+
+while IFS='|' read -r display_name file_path validation_status is_connected; do
+  filename=$(basename "$file_path" .conf)
+
+  # Skip if currently connected
+  if [[ "$is_connected" == "true" ]]; then
+    echo "  🟢 Skipped (currently connected): $filename"
+    ((SKIPPED_CONNECTED++))
+  else
+    # Remove the config file
+    rm -f "$file_path"
+
+    # Remove from performance history
+    if [[ -f "$PERF_DIR/${filename}.log" ]]; then
+      rm -f "$PERF_DIR/${filename}.log"
+    fi
+
+    # Check and update config file if this was the last connected server
+    if [[ -f "$CONFIG_FILE" ]]; then
+      LAST_CONNECTED=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2)
+      AUTOCONNECT_MODE=$(grep "^AUTOCONNECT_MODE=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2)
+
+      if [[ "$LAST_CONNECTED" == "$filename" ]]; then
+        atomic_config_update "LAST_CONNECTED_SERVER" "" "$CONFIG_FILE"
+        # If autoconnect mode is "last_used", reset to "quickest" since last used server is gone
+        if [[ "$AUTOCONNECT_MODE" == "last_used" ]]; then
+          atomic_config_update "AUTOCONNECT_MODE" "quickest" "$CONFIG_FILE"
+        fi
+      fi
+
+      # Check and update if this was the autoconnect server
+      AUTOCONNECT_SERVER=$(grep "^AUTOCONNECT_SERVER=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2)
+      if [[ "$AUTOCONNECT_SERVER" == "$filename" ]]; then
+        atomic_config_update "AUTOCONNECT_SERVER" "" "$CONFIG_FILE"
+        # Reset autoconnect mode to quickest as default
+        if [[ "$AUTOCONNECT_MODE" == "specific" ]]; then
+          atomic_config_update "AUTOCONNECT_MODE" "quickest" "$CONFIG_FILE"
+        fi
+      fi
+    fi
+
+    pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR" 2>/dev/null || echo "$filename")
+    echo "  ✓ Removed: $pretty_name"
+    ((REMOVED++))
+  fi
+done <<< "$SELECTED"
+
+echo ""
+if [[ $REMOVED -gt 0 ]]; then
+  echo "Successfully removed $REMOVED server config(s)"
+fi
+if [[ $SKIPPED_CONNECTED -gt 0 ]]; then
+  echo "Skipped $SKIPPED_CONNECTED server(s) - disconnect before removing"
+fi

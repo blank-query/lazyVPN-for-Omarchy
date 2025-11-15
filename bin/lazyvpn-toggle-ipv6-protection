@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# Toggle IPv6 leak protection
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# Load current config
+load_config "$CONFIG_FILE"
+
+# Toggle the setting
+if [[ "$DISABLE_IPV6" == "true" ]]; then
+  NEW_VALUE="false"
+else
+  NEW_VALUE="true"
+fi
+
+# Update config atomically
+if ! atomic_config_update "DISABLE_IPV6" "$NEW_VALUE" "$CONFIG_FILE"; then
+  error "Failed to update config"
+  exit 1
+fi

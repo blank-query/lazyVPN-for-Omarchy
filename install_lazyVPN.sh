@@ -1,0 +1,332 @@
+#!/bin/bash
+
+# LazyVPN Installation Script for Omarchy (systemd-networkd version)
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OMARCHY_BIN="$HOME/.local/share/omarchy/bin"
+OMARCHY_MENU_FILE="$OMARCHY_BIN/omarchy-menu"
+
+# Track installation state
+INSTALL_STARTED=false
+INSTALL_COMPLETE=false
+
+# Cleanup on error
+cleanup_on_error() {
+  local exit_code=$?
+
+  # Only cleanup if install started but didn't complete successfully
+  if [[ "$INSTALL_STARTED" == "true" ]] && [[ "$INSTALL_COMPLETE" == "false" ]] && [[ $exit_code -ne 0 ]]; then
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "Installation failed! Running cleanup to prevent partial installation..."
+    echo "═══════════════════════════════════════════════════════════"
+    echo ""
+
+    # Run uninstaller if it exists
+    if [[ -f "$OMARCHY_BIN/lazyvpn-uninstall" ]]; then
+      bash "$OMARCHY_BIN/lazyvpn-uninstall" 2>/dev/null || true
+    else
+      # Manual cleanup if uninstaller not yet installed
+      echo "Cleaning up LazyVPN files..."
+      rm -f "$OMARCHY_BIN"/lazyvpn-* 2>/dev/null || true
+
+      # Restore omarchy-menu backup if it exists
+      if [[ -f "$OMARCHY_MENU_FILE.backup" ]]; then
+        mv "$OMARCHY_MENU_FILE.backup" "$OMARCHY_MENU_FILE" 2>/dev/null || true
+        echo "Restored omarchy-menu from backup"
+      fi
+
+      echo "Cleanup complete"
+    fi
+
+    echo ""
+    echo "Please fix the error and try installing again."
+    exit $exit_code
+  fi
+}
+
+# Set trap for errors
+trap cleanup_on_error ERR EXIT
+
+echo "==================================="
+echo "LazyVPN Installer for Omarchy"
+echo "==================================="
+echo ""
+
+# Check if running on Omarchy
+if [[ ! -d "$HOME/.local/share/omarchy" ]]; then
+  echo "Error: Omarchy installation not found"
+  echo "This tool is designed for Omarchy Linux"
+  exit 1
+fi
+
+# Check if LazyVPN is already installed
+if [[ -f "$OMARCHY_BIN/lazyvpn-menu" ]] || [[ -n "$(find "$OMARCHY_BIN" -name "lazyvpn-*" -print -quit 2>/dev/null)" ]]; then
+  echo "Error: LazyVPN is already installed"
+  echo ""
+  echo "To reinstall or upgrade:"
+  echo "  1. Run: lazyvpn-uninstall (from Omarchy menu or terminal)"
+  echo "  2. Then run this installer again"
+  echo ""
+  exit 1
+fi
+
+# Check if systemd-networkd is available and enabled
+if ! systemctl is-enabled systemd-networkd &>/dev/null; then
+  echo "Error: systemd-networkd is not enabled."
+  echo "LazyVPN is built specifically for systemd-networkd."
+  echo "Please enable it first:"
+  echo "  sudo systemctl enable --now systemd-networkd"
+  echo "  sudo systemctl enable --now systemd-resolved"
+  exit 1
+fi
+
+# Check if WireGuard is available
+if ! modprobe -n wireguard &>/dev/null && ! command -v wg &>/dev/null; then
+  echo "Installing WireGuard tools (required for VPN management)..."
+  sudo pacman -S --noconfirm --needed wireguard-tools
+fi
+
+# Check if curl is installed (required for speedtest and status)
+if ! command -v curl &>/dev/null; then
+  echo "Installing curl (required for speed testing and public IP detection)..."
+  sudo pacman -S --noconfirm --needed curl
+fi
+
+# Check if bc is installed (required for speedtest calculations)
+if ! command -v bc &>/dev/null; then
+  echo "Installing bc (required for speed calculations)..."
+  sudo pacman -S --noconfirm --needed bc
+fi
+
+# Check if iptables is installed (required for killswitch)
+if ! command -v iptables &>/dev/null; then
+  echo "Installing iptables (required for killswitch)..."
+  sudo pacman -S --noconfirm --needed iptables
+fi
+
+# Check if dig is installed (required for DNS leak testing)
+if ! command -v dig &>/dev/null; then
+  echo "Installing bind-tools (required for DNS leak testing)..."
+  sudo pacman -S --noconfirm --needed bind-tools
+fi
+
+# Mark that installation has started
+INSTALL_STARTED=true
+
+echo "Step 1: Installing uninstaller (for error recovery)..."
+
+# Copy uninstall script FIRST so cleanup can always run if installation fails
+if [[ -f "$SCRIPT_DIR/bin/lazyvpn-uninstall" ]]; then
+  cp "$SCRIPT_DIR/bin/lazyvpn-uninstall" "$OMARCHY_BIN/lazyvpn-uninstall"
+  chmod +x "$OMARCHY_BIN/lazyvpn-uninstall"
+  echo "  Installed: lazyvpn-uninstall"
+else
+  echo "Error: bin/lazyvpn-uninstall not found"
+  exit 1
+fi
+
+echo ""
+echo "Step 2: Installing LazyVPN scripts..."
+
+# Copy all lazyvpn scripts to Omarchy bin (except uninstaller, already copied)
+for script in "$SCRIPT_DIR"/bin/lazyvpn-*; do
+  if [[ -f "$script" ]] && [[ "$(basename "$script")" != "lazyvpn-uninstall" ]]; then
+    cp "$script" "$OMARCHY_BIN/"
+    chmod +x "$OMARCHY_BIN/$(basename "$script")"
+    echo "  Installed: $(basename "$script")"
+  fi
+done
+
+echo ""
+echo "Step 3: Installing sudoers configuration (passwordless VPN operations)..."
+
+# Create sudoers file for passwordless sudo
+SUDOERS_TEMP=$(mktemp)
+cat > "$SUDOERS_TEMP" <<EOF
+# LazyVPN sudoers configuration
+# Allow VPN management without password
+
+# Network interface management
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/networkctl
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip route *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip link *
+
+# systemd-networkd management
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart systemd-networkd
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload systemd-networkd
+
+# File management for VPN configs
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm /etc/systemd/network/99-wg*.netdev
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm /etc/systemd/network/99-wg*.network
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/network/99-wg*.netdev
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/network/99-wg*.network
+
+# Firewall management for killswitch
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables *
+
+# LazyVPN killswitch scripts (user-specific paths)
+%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-setup-firewall-killswitch
+%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-disable-killswitch
+%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-update-killswitch
+%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-toggle-killswitch
+EOF
+
+# Validate sudoers syntax before installing
+if sudo visudo -cf "$SUDOERS_TEMP" 2>/dev/null; then
+  sudo cp "$SUDOERS_TEMP" /etc/sudoers.d/lazyvpn
+  sudo chmod 0440 /etc/sudoers.d/lazyvpn
+  echo "  ✓ Sudoers configuration installed"
+  echo "  VPN operations will not require password"
+else
+  echo "  ⚠ Sudoers file has syntax errors, skipping installation"
+  echo "  You will be prompted for password when connecting/disconnecting"
+fi
+
+# Clean up temp file
+rm -f "$SUDOERS_TEMP"
+
+echo ""
+echo "Step 4: Initializing LazyVPN..."
+
+# Initialize LazyVPN (creates config directories)
+"$OMARCHY_BIN"/lazyvpn-init
+
+# Prompt for connection name
+echo ""
+echo "Configure systemd-networkd Connection Name:"
+echo "This is the interface name for your VPN connection."
+echo "LazyVPN uses a single interface that switches between servers."
+echo ""
+read -p "Connection name (default: wg0): " CONNECTION_NAME
+CONNECTION_NAME="${CONNECTION_NAME:-wg0}"
+
+# Validate connection name
+if [[ ! "$CONNECTION_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  echo "Invalid connection name. Using default: wg0"
+  CONNECTION_NAME="wg0"
+fi
+
+echo "  Connection name set to: $CONNECTION_NAME"
+
+# Save to config atomically
+CONFIG_FILE="$HOME/.config/lazyvpn/config"
+if grep -q "^CONNECTION_NAME=" "$CONFIG_FILE" 2>/dev/null; then
+  sed "s|^CONNECTION_NAME=.*|CONNECTION_NAME=$CONNECTION_NAME|" "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
+  mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+else
+  echo "CONNECTION_NAME=$CONNECTION_NAME" >> "$CONFIG_FILE"
+fi
+
+echo ""
+echo "Step 5: Integrating with omarchy-menu..."
+
+# Backup original omarchy-menu
+if [[ ! -f "$OMARCHY_MENU_FILE.backup" ]]; then
+  cp "$OMARCHY_MENU_FILE" "$OMARCHY_MENU_FILE.backup"
+  echo "  Created backup: omarchy-menu.backup"
+fi
+
+# Check if already integrated
+if grep -q "LazyVPN" "$OMARCHY_MENU_FILE"; then
+  echo "  LazyVPN already integrated in omarchy-menu"
+else
+  # Use a single, robust awk script to perform all three modifications.
+  # This is the most reliable method and avoids all sed portability issues.
+  awk '
+    # 1. Before the line containing show_main_menu(), print our new function.
+    /^show_main_menu\(\)/ {
+      print "show_lazyvpn_menu() {"
+      print "  lazyvpn-menu"
+      print "}"
+      print ""
+    }
+
+    # 2. Find the line inside show_main_menu() and modify it.
+    # The actual pattern in the file has \\n (literal backslash-n in the bash string).
+    /menu "Go" ".*Setup/ {
+      sub(/Setup\\n/, "Setup\\n󰖂  LazyVPN\\n")
+    }
+
+    # 3. Find the *system*) case and print our new case before it.
+    /\*system\*\) show_system_menu/ {
+      print "  *lazyvpn*) show_lazyvpn_menu ;;"
+    }
+
+    # 4. Print every line (original or modified).
+    { print }
+  ' "$OMARCHY_MENU_FILE" > "$OMARCHY_MENU_FILE.tmp" && mv "$OMARCHY_MENU_FILE.tmp" "$OMARCHY_MENU_FILE" && chmod +x "$OMARCHY_MENU_FILE"
+
+  # Diagnostic step: copy the modified file to the local directory for inspection
+  # cp "$OMARCHY_MENU_FILE" ./omarchy-menu.modified
+
+  echo "  Integrated LazyVPN into main menu"
+  
+  echo "  Restarting menu to apply changes..."
+  nohup omarchy-restart-walker > /dev/null 2>&1 &
+fi
+
+echo ""
+echo "Step 6: Adding keyboard shortcut (SUPER+L)..."
+
+# Add keybinding to Hyprland config
+HYPR_BINDINGS="$HOME/.config/hypr/bindings.conf"
+if [[ -f "$HYPR_BINDINGS" ]]; then
+  if grep -q "LazyVPN" "$HYPR_BINDINGS"; then
+    echo "  LazyVPN keybinding already exists in Hyprland config"
+  else
+    echo "" >> "$HYPR_BINDINGS"
+    echo "# LazyVPN" >> "$HYPR_BINDINGS"
+    echo "bindd = SUPER, L, LazyVPN, exec, lazyvpn-menu" >> "$HYPR_BINDINGS"
+    echo "  ✓ Added SUPER+L keybinding to Hyprland"
+
+    # Reload Hyprland config
+    hyprctl reload >/dev/null 2>&1
+    echo "  ✓ Reloaded Hyprland configuration"
+  fi
+else
+  echo "  ⚠ Hyprland bindings.conf not found, skipping keybinding"
+fi
+
+# Add to keybindings helper
+KEYBINDINGS_SCRIPT="$OMARCHY_BIN/omarchy-menu-keybindings"
+if [[ -f "$KEYBINDINGS_SCRIPT" ]]; then
+  if grep -q "LazyVPN" "$KEYBINDINGS_SCRIPT"; then
+    echo "  LazyVPN already in keybindings helper"
+  else
+    # Add LazyVPN to static_bindings() function
+    sed -i '/static_bindings() {/a\    echo "SUPER,L,LazyVPN,exec,lazyvpn-menu"' "$KEYBINDINGS_SCRIPT"
+    echo "  ✓ Added to keybindings helper (SUPER+K)"
+  fi
+else
+  echo "  ⚠ Keybindings script not found, skipping helper integration"
+fi
+
+# Mark installation as complete
+INSTALL_COMPLETE=true
+
+echo ""
+echo "==================================="
+echo "Installation Complete!"
+echo "==================================="
+echo ""
+echo "Next steps:"
+echo "1. Download WireGuard configs from your VPN provider"
+echo "2. Place .conf files in: $HOME/.config/lazyvpn/wireguard/"
+echo "3. Press SUPER+ALT+SPACE and select 'LazyVPN'"
+echo ""
+echo "Compatible with any WireGuard VPN provider:"
+echo "  - ProtonVPN: https://account.protonvpn.com (Downloads → WireGuard)"
+echo "  - Mullvad: https://mullvad.net/en/account (WireGuard configuration)"
+echo "  - IVPN: https://ivpn.net/account (WireGuard Config Generator)"
+echo "  - Or any custom WireGuard server"
+echo ""
+echo "Tips:"
+echo "  - Rename configs for easier identification"
+echo "  - Format: [provider-]CountryCode-City#Number.conf"
+echo "  - Examples: proton-US-NY#1.conf, mullvad-SE-Stockholm#5.conf, US-CA#1.conf"
+echo "  - Provider prefix is optional (detection also works via endpoint/DNS)"
+omarchy-show-done

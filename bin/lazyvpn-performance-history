@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# View historical performance data for servers
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+PERF_DIR="$CONFIG_DIR/performance"
+mkdir -p "$PERF_DIR"
+
+SERVER_NAME="$1"
+
+if [[ -z "$SERVER_NAME" ]]; then
+  # Show summary for all servers
+  echo ""
+  echo "╔════════════════════════════════════════════════════════════╗"
+  echo "║ Server Performance History                                 ║"
+  echo "╚════════════════════════════════════════════════════════════╝"
+  echo ""
+
+  # Check if any performance data exists
+  if [[ ! -d "$PERF_DIR" ]] || [[ -z "$(ls -A "$PERF_DIR"/*.log 2>/dev/null)" ]]; then
+    echo "No performance data recorded yet."
+    echo ""
+    echo "Performance data is automatically recorded when you:"
+    echo "  • Run speed tests"
+    echo "  • Run latency tests"
+    echo ""
+    exit 0
+  fi
+
+  echo "═══════════════════════════════════════════════════════════════════════════════════"
+  printf "%-50s %10s %10s %8s\n" "Server" "Avg Speed" "Avg Latency" "Tests"
+  echo "═══════════════════════════════════════════════════════════════════════════════════"
+
+  # Process each server's performance log
+  for perf_file in "$PERF_DIR"/*.log; do
+    [[ ! -f "$perf_file" ]] && continue
+
+    server=$(basename "$perf_file" .log)
+
+    # Handle DIRECT connection specially
+    if [[ "$server" == "DIRECT" ]]; then
+      pretty_name="🌐 Direct (Non-VPN)"
+    else
+      pretty_name=$(get_pretty_server_name "$server" "$SCRIPT_DIR")
+    fi
+
+    # Calculate averages
+    speed_sum=0
+    speed_count=0
+    latency_sum=0
+    latency_count=0
+
+    while IFS='|' read -r timestamp type value status; do
+      if [[ "$type" == "speed" ]] && [[ "$status" == "ok" ]] && [[ -n "$value" ]] && [[ "$value" != "0" ]]; then
+        speed_sum=$(echo "$speed_sum + $value" | bc -l 2>/dev/null || echo "$speed_sum")
+        ((speed_count++))
+      elif [[ "$type" == "latency" ]] && [[ "$status" == "ok" ]] && [[ -n "$value" ]] && [[ "$value" != "0" ]]; then
+        latency_sum=$(echo "$latency_sum + $value" | bc -l 2>/dev/null || echo "$latency_sum")
+        ((latency_count++))
+      fi
+    done < "$perf_file"
+
+    # Calculate averages
+    if [[ $speed_count -gt 0 ]]; then
+      avg_speed=$(echo "scale=2; $speed_sum / $speed_count" | bc -l 2>/dev/null || echo "0")
+    else
+      avg_speed="N/A"
+    fi
+
+    if [[ $latency_count -gt 0 ]]; then
+      avg_latency=$(echo "scale=0; $latency_sum / $latency_count" | bc -l 2>/dev/null || echo "0")
+    else
+      avg_latency="N/A"
+    fi
+
+    total_tests=$((speed_count + latency_count))
+
+    # Format output
+    if [[ "$avg_speed" != "N/A" ]]; then
+      printf "%-50s %8s Mbps" "$pretty_name" "$avg_speed"
+    else
+      printf "%-50s %10s" "$pretty_name" "N/A"
+    fi
+
+    if [[ "$avg_latency" != "N/A" ]]; then
+      printf " %8s ms" "$avg_latency"
+    else
+      printf " %10s" "N/A"
+    fi
+
+    printf " %6s\n" "$total_tests"
+  done | sort -t'|' -k2 -rn 2>/dev/null || cat
+
+  echo "═══════════════════════════════════════════════════════════════════════════════════"
+else
+  # Show detailed history for specific server
+  if [[ "$SERVER_NAME" == "DIRECT" ]]; then
+    pretty_name="🌐 Direct (Non-VPN)"
+  else
+    pretty_name=$(get_pretty_server_name "$SERVER_NAME" "$SCRIPT_DIR")
+  fi
+
+  echo ""
+  echo "╔════════════════════════════════════════════════════════════╗"
+  echo "║ Performance History: $pretty_name"
+  echo "╚════════════════════════════════════════════════════════════╝"
+  echo ""
+
+  PERF_FILE="$PERF_DIR/${SERVER_NAME}.log"
+
+  if [[ ! -f "$PERF_FILE" ]]; then
+    echo "No performance data recorded for this server."
+    echo ""
+    exit 0
+  fi
+
+  echo "Recent Test Results:"
+  echo "═══════════════════════════════════════════════════════════"
+  printf "%-20s %-10s %-15s %-10s\n" "Date/Time" "Type" "Value" "Status"
+  echo "═══════════════════════════════════════════════════════════"
+
+  # Show last 20 results
+  tail -n 20 "$PERF_FILE" | while IFS='|' read -r timestamp type value status; do
+    date_str=$(date -d "@$timestamp" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "Unknown")
+
+    if [[ "$type" == "speed" ]]; then
+      value_str="${value} Mbps"
+    elif [[ "$type" == "latency" ]]; then
+      value_str="${value} ms"
+    else
+      value_str="$value"
+    fi
+
+    printf "%-20s %-10s %-15s %-10s\n" "$date_str" "$type" "$value_str" "$status"
+  done
+
+  echo "═══════════════════════════════════════════════════════════"
+fi

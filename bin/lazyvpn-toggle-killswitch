@@ -1,0 +1,85 @@
+#!/bin/bash
+
+# Toggle firewall-based killswitch (requires sudo)
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+  info "Firewall killswitch requires root privileges"
+  info "You will be prompted for your password..."
+  exec sudo "$0" "$@"
+fi
+
+# Ensure killswitch chains exist (auto-setup if needed)
+if ! iptables -L LAZYVPN_OUT -n &>/dev/null; then
+  info "Setting up killswitch chains..."
+  "$SCRIPT_DIR/lazyvpn-setup-firewall-killswitch"
+fi
+
+# Load config
+CONFIG_FILE="$HOME/.config/lazyvpn/config"
+[[ -n "$SUDO_USER" ]] && CONFIG_FILE="/home/$SUDO_USER/.config/lazyvpn/config"
+
+# Check if killswitch is currently enabled (by checking for the DROP rule)
+if iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
+  # Killswitch is enabled, so disable it
+  info "Disabling killswitch..."
+  iptables -F LAZYVPN_OUT
+  iptables -A LAZYVPN_OUT -j RETURN
+  ip6tables -F LAZYVPN_OUT
+  ip6tables -A LAZYVPN_OUT -j RETURN
+
+  # Update config
+  if [[ -n "$SUDO_USER" ]]; then
+    sudo -u "$SUDO_USER" bash -c "source '$SCRIPT_DIR/lazyvpn-common' && atomic_config_update 'KILLSWITCH' 'false' '$CONFIG_FILE'"
+  else
+    source "$SCRIPT_DIR/lazyvpn-common"
+    atomic_config_update "KILLSWITCH" "false" "$CONFIG_FILE"
+  fi
+
+  info "Killswitch disabled"
+else
+  # Killswitch is disabled, so enable it
+  info "Enabling killswitch..."
+
+  # Update config first
+  if [[ -n "$SUDO_USER" ]]; then
+    sudo -u "$SUDO_USER" bash -c "source '$SCRIPT_DIR/lazyvpn-common' && atomic_config_update 'KILLSWITCH' 'true' '$CONFIG_FILE'"
+  else
+    source "$SCRIPT_DIR/lazyvpn-common"
+    atomic_config_update "KILLSWITCH" "true" "$CONFIG_FILE"
+  fi
+
+  # Check if VPN is currently connected
+  CONN_NAME="${CONNECTION_NAME:-wg0}"
+  if ip link show "$CONN_NAME" &>/dev/null; then
+    # VPN is connected - use update-killswitch to build proper rules
+    info "VPN is connected - building proper killswitch rules for active connection..."
+    if "$SCRIPT_DIR/lazyvpn-update-killswitch"; then
+      info "✓ Killswitch enabled with rules for active VPN connection"
+    else
+      warn "Failed to build killswitch rules - using simple blocking mode"
+      # Fallback to simple blocking
+      iptables -F LAZYVPN_OUT
+      iptables -A LAZYVPN_OUT -o lo -j RETURN
+      iptables -A LAZYVPN_OUT -j DROP
+      ip6tables -F LAZYVPN_OUT
+      ip6tables -A LAZYVPN_OUT -o lo -j RETURN
+      ip6tables -A LAZYVPN_OUT -j DROP
+    fi
+  else
+    # No VPN connected - use simple blocking mode
+    info "No active VPN connection - using simple blocking mode"
+    iptables -F LAZYVPN_OUT
+    iptables -A LAZYVPN_OUT -o lo -j RETURN
+    iptables -A LAZYVPN_OUT -j DROP
+    ip6tables -F LAZYVPN_OUT
+    ip6tables -A LAZYVPN_OUT -o lo -j RETURN
+    ip6tables -A LAZYVPN_OUT -j DROP
+    info "✓ Killswitch enabled - all internet traffic blocked"
+  fi
+fi

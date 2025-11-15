@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# Show VPN status (systemd-networkd version)
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# Load connection name from config
+load_config "$CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+# Validate CONNECTION_NAME
+if [[ ! "$CONN_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  error "Invalid CONNECTION_NAME in config"
+fi
+
+if is_connected "$CONN_NAME"; then
+  # Get server name from config
+  LAST_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" | cut -d= -f2)
+
+  # Get pretty server name for display
+  if [[ -n "$LAST_SERVER" ]]; then
+    PRETTY_SERVER=$(get_pretty_server_name "$LAST_SERVER" "$SCRIPT_DIR")
+  else
+    PRETTY_SERVER="Unknown"
+  fi
+
+  # Output in format expected by menu
+  echo "status=connected"
+  echo "server=$PRETTY_SERVER"
+  echo "server_file=$LAST_SERVER"
+else
+  echo "status=disconnected"
+fi

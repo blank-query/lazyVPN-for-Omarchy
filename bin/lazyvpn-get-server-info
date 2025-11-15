@@ -1,0 +1,155 @@
+#!/bin/bash
+
+# Get detailed server information from WireGuard config
+
+SERVER_NAME="$1"
+
+# Validate server name to prevent path traversal
+# shellcheck source=./lazyvpn-common
+if [[ ! "$SERVER_NAME" =~ ^[a-zA-Z0-9._#-]+$ ]]; then
+  echo "error=Invalid server name"
+  exit 1
+fi
+
+# Prevent path traversal
+if [[ "$SERVER_NAME" == *".."* ]] || [[ "$SERVER_NAME" == "/"* ]]; then
+  echo "error=Invalid server name"
+  exit 1
+fi
+
+WG_DIR="$HOME/.config/lazyvpn/wireguard"
+CONFIG_FILE="$WG_DIR/${SERVER_NAME}.conf"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "error=Server config not found"
+  exit 1
+fi
+
+# Parse configuration file
+endpoint=$(grep -m1 "^Endpoint" "$CONFIG_FILE" | cut -d= -f2 | tr -d ' ')
+server_ip=$(echo "$endpoint" | cut -d: -f1)
+server_port=$(echo "$endpoint" | cut -d: -f2)
+
+# Try to extract DNS servers
+dns=$(grep -m1 "^DNS" "$CONFIG_FILE" | cut -d= -f2 | tr -d ' ')
+
+# Detect VPN provider
+provider=""
+
+# Method 1: Check filename prefix
+if [[ "$SERVER_NAME" =~ ^(proton|mullvad|ivpn|pia|nordvpn|surfshark|expressvpn|windscribe)- ]]; then
+  case "${BASH_REMATCH[1],,}" in
+    proton) provider="ProtonVPN" ;;
+    mullvad) provider="Mullvad" ;;
+    ivpn) provider="IVPN" ;;
+    pia) provider="PIA" ;;
+    nordvpn) provider="NordVPN" ;;
+    surfshark) provider="Surfshark" ;;
+    expressvpn) provider="ExpressVPN" ;;
+    windscribe) provider="Windscribe" ;;
+  esac
+fi
+
+# Method 2: Check endpoint domain if no prefix found
+if [[ -z "$provider" ]]; then
+  if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]]; then
+    provider="ProtonVPN"
+  elif [[ "$endpoint" =~ mullvad\.net ]]; then
+    provider="Mullvad"
+  elif [[ "$endpoint" =~ ivpn\.net ]]; then
+    provider="IVPN"
+  elif [[ "$endpoint" =~ privateinternetaccess\.com ]]; then
+    provider="PIA"
+  elif [[ "$endpoint" =~ nordvpn\.com ]]; then
+    provider="NordVPN"
+  elif [[ "$endpoint" =~ surfshark\.com ]]; then
+    provider="Surfshark"
+  elif [[ "$endpoint" =~ expressvpn\.com ]]; then
+    provider="ExpressVPN"
+  elif [[ "$endpoint" =~ windscribe\.com ]]; then
+    provider="Windscribe"
+  fi
+fi
+
+# Method 3: Check DNS servers if still unknown
+if [[ -z "$provider" && -n "$dns" ]]; then
+  case "$dns" in
+    10.2.0.1) provider="ProtonVPN" ;;
+    10.64.0.1|193.138.218.74) provider="Mullvad" ;;
+    172.16.0.1) provider="IVPN" ;;
+    10.0.0.241|10.0.0.242) provider="PIA" ;;
+  esac
+fi
+
+# Method 4: Check comments in config file
+if [[ -z "$provider" ]]; then
+  if grep -qi "protonvpn" "$CONFIG_FILE"; then
+    provider="ProtonVPN"
+  elif grep -qi "mullvad" "$CONFIG_FILE"; then
+    provider="Mullvad"
+  elif grep -qi "ivpn" "$CONFIG_FILE"; then
+    provider="IVPN"
+  fi
+fi
+
+# Parse filename for location info
+# Strip provider prefix if present (e.g., proton-US-NY#1 → US-NY#1)
+PARSE_NAME="$SERVER_NAME"
+if [[ "$PARSE_NAME" =~ ^(proton|mullvad|ivpn|pia|nordvpn|surfshark|expressvpn|windscribe)- ]]; then
+  PARSE_NAME="${PARSE_NAME#*-}"
+fi
+
+# Also strip common generic prefixes like wg-, vpn-, server-, etc.
+if [[ "$PARSE_NAME" =~ ^(wg|vpn|server|conf)- ]]; then
+  PARSE_NAME="${PARSE_NAME#*-}"
+fi
+
+# Format examples:
+#   US-NY#1, CH#5, Netherlands-Amsterdam#3
+#   SE-130, US-DC-30 (ProtonVPN style)
+#   SE#130, US#30
+if [[ "$PARSE_NAME" =~ ^([A-Z]{2,})[-]([A-Za-z]+)[-#]([0-9]+)$ ]]; then
+  # Format: SE-Stockholm-130 or US-DC-30
+  country="${BASH_REMATCH[1]}"
+  city="${BASH_REMATCH[2]}"
+  number="${BASH_REMATCH[3]}"
+elif [[ "$PARSE_NAME" =~ ^([A-Z]{2,})[-]([0-9]+)$ ]]; then
+  # Format: SE-130 or US-30 (no city, just country-number)
+  country="${BASH_REMATCH[1]}"
+  city=""
+  number="${BASH_REMATCH[2]}"
+elif [[ "$PARSE_NAME" =~ ^([A-Z]{2,})#([0-9]+)$ ]]; then
+  # Format: SE#130 or US#30
+  country="${BASH_REMATCH[1]}"
+  city=""
+  number="${BASH_REMATCH[2]}"
+else
+  # Fallback: use the whole filename
+  country="Unknown"
+  city=""
+  number=""
+fi
+
+# Determine services (ProtonVPN features)
+# This is a placeholder - you can enhance based on filename patterns or comments in config
+services="Standard VPN"
+if [[ "$SERVER_NAME" =~ [Pp]2[Pp] ]]; then
+  services="P2P, $services"
+fi
+if [[ "$SERVER_NAME" =~ [Tt]or ]]; then
+  services="Tor, $services"
+fi
+if [[ "$SERVER_NAME" =~ [Ss]ecure[Cc]ore ]]; then
+  services="Secure Core, $services"
+fi
+
+echo "name=$SERVER_NAME"
+echo "country=$country"
+echo "city=$city"
+echo "number=$number"
+echo "endpoint=$endpoint"
+echo "server_ip=$server_ip"
+echo "server_port=$server_port"
+echo "dns=$dns"
+echo "services=$services"
+echo "provider=$provider"

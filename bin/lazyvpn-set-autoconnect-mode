@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Set autoconnect mode
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+MODE="$1"
+SERVER="$2"
+
+CONFIG_FILE="$HOME/.config/lazyvpn/config"
+
+if [[ -z "$MODE" ]]; then
+  echo "Usage: lazyvpn-set-autoconnect-mode <quickest|random|last_used|specific> [server_name]"
+  exit 1
+fi
+
+# Load config to get CONNECTION_NAME for cleanup
+load_config "$CONFIG_FILE"
+
+case "$MODE" in
+  quickest|random|last_used|specific)
+    if ! atomic_config_update "AUTOCONNECT_MODE" "$MODE" "$CONFIG_FILE"; then
+      error "Failed to update autoconnect mode in config"
+    fi
+    info "Autoconnect mode set to: $MODE"
+
+    if [[ "$MODE" == "specific" ]]; then
+      if [[ -z "$SERVER" ]]; then
+        error "Server name required for 'specific' mode"
+      fi
+      # Validate server name
+      if [[ ! "$SERVER" =~ ^[a-zA-Z0-9._#-]+$ ]]; then
+        error "Invalid server name"
+      fi
+      if ! atomic_config_update "AUTOCONNECT_SERVER" "$SERVER" "$CONFIG_FILE"; then
+        error "Failed to update autoconnect server in config"
+      fi
+      info "Autoconnect server set to: $SERVER"
+    fi
+    ;;
+  *)
+    error "Invalid mode. Use: quickest, random, last_used, or specific"
+    ;;
+esac

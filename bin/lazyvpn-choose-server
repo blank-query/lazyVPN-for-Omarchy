@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Choose a VPN server using fzf picker and connect
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+WG_DIR="$CONFIG_DIR/wireguard"
+
+# Check if configs exist
+if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
+  echo "No WireGuard configs found. Add servers first."
+  echo ""
+  read -r -p "Press Enter to continue..."
+  exit 1
+fi
+
+# Build list with pretty names for fzf
+TEMP_LIST=$(mktemp)
+trap 'rm -f "$TEMP_LIST"' EXIT
+
+for conf in "$WG_DIR"/*.conf; do
+  [[ -f "$conf" ]] || continue
+
+  filename=$(basename "$conf" .conf)
+  pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
+
+  # Format: pretty name|filename|config_path
+  echo "$pretty_name|$filename|$conf" >> "$TEMP_LIST"
+done
+
+# Use fzf with formatted list and preview
+echo ""
+echo "Select a server to connect to:"
+echo ""
+
+SELECTED=$(cat "$TEMP_LIST" | fzf \
+  --prompt="Choose server: " \
+  --delimiter='|' \
+  --with-nth=1 \
+  --preview="$SCRIPT_DIR/lazyvpn-get-server-info \$(echo {} | cut -d'|' -f2) | sed 's/^/  /'" \
+  --preview-window=right:40% \
+  --height=80%)
+
+# If no selection (user cancelled)
+if [[ -z "$SELECTED" ]]; then
+  exit 1
+fi
+
+# Extract filename and connect
+SERVER_NAME=$(echo "$SELECTED" | cut -d'|' -f2)
+
+echo ""
+echo "Connecting to selected server..."
+echo ""
+
+# Connect to the server
+"$SCRIPT_DIR/lazyvpn-connect" "$SERVER_NAME"

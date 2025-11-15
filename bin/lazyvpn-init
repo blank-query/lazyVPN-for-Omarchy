@@ -1,0 +1,140 @@
+#!/bin/bash
+
+# Initialize LazyVPN directories and config
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+WG_DIR="$CONFIG_DIR/wireguard"
+CONFIG_FILE="$CONFIG_DIR/config"
+# shellcheck source=./lazyvpn-common
+
+# Create directories
+if ! mkdir -p "$WG_DIR"; then
+  echo "Error: Failed to create $WG_DIR"
+  echo "Check permissions on: $(dirname "$WG_DIR")"
+  exit 1
+fi
+
+# Function to create full config
+create_full_config() {
+  cat > "${CONFIG_FILE}.tmp" << 'EOF'
+# LazyVPN Configuration
+CONNECTION_NAME=wg0
+KILLSWITCH=false
+ALLOW_LOCAL_NETWORK=true
+KILLSWITCH_AUTO_DISABLE=true
+DISABLE_IPV6=true
+AUTOSTART=false
+AUTOCONNECT=false
+AUTOCONNECT_MODE=quickest
+AUTOCONNECT_SERVER=
+LAST_CONNECTED_SERVER=
+AUTO_RECOVER=true
+AUTO_FAILOVER=false
+EOF
+
+  # Atomic move
+  if ! mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"; then
+    echo "Error: Failed to create config file"
+    echo "Check permissions on: $CONFIG_DIR"
+    rm -f "${CONFIG_FILE}.tmp"
+    exit 1
+  fi
+}
+
+# Create default config if it doesn't exist or is too minimal
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  create_full_config
+elif [[ $(wc -l < "$CONFIG_FILE") -lt 5 ]]; then
+  # Config exists but is too minimal (less than 5 lines), recreate it
+  echo "Incomplete config detected, recreating with full defaults..."
+  create_full_config
+fi
+
+# Ensure CONNECTION_NAME exists in config (for upgrades from old version)
+if ! grep -q "^CONNECTION_NAME=" "$CONFIG_FILE" 2>/dev/null; then
+  # Use atomic update
+  if grep -q "^# LazyVPN Configuration" "$CONFIG_FILE"; then
+    # Add after header comment
+    sed '/^# LazyVPN Configuration/a\CONNECTION_NAME=wg0' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+  else
+    # Add at beginning
+    sed '1i\CONNECTION_NAME=wg0' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+  fi
+  mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+fi
+
+# Clean up old state file if it exists (migration)
+STATE_FILE="$CONFIG_DIR/state"
+if [[ -f "$STATE_FILE" ]]; then
+  echo "Removing deprecated state file..."
+  rm -f "$STATE_FILE"
+fi
+
+# Ensure ALLOW_LOCAL_NETWORK exists in config (for upgrades)
+if ! grep -q "^ALLOW_LOCAL_NETWORK=" "$CONFIG_FILE" 2>/dev/null; then
+  # Add after KILLSWITCH
+  if grep -q "^KILLSWITCH=" "$CONFIG_FILE"; then
+    sed '/^KILLSWITCH=/a\ALLOW_LOCAL_NETWORK=true' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+  fi
+fi
+
+# Ensure KILLSWITCH_AUTO_DISABLE exists in config (for upgrades)
+if ! grep -q "^KILLSWITCH_AUTO_DISABLE=" "$CONFIG_FILE" 2>/dev/null; then
+  # Add after ALLOW_LOCAL_NETWORK
+  if grep -q "^ALLOW_LOCAL_NETWORK=" "$CONFIG_FILE"; then
+    sed '/^ALLOW_LOCAL_NETWORK=/a\KILLSWITCH_AUTO_DISABLE=true' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+  fi
+fi
+
+# Ensure DISABLE_IPV6 exists in config (for upgrades)
+if ! grep -q "^DISABLE_IPV6=" "$CONFIG_FILE" 2>/dev/null; then
+  # Add after KILLSWITCH_AUTO_DISABLE
+  if grep -q "^KILLSWITCH_AUTO_DISABLE=" "$CONFIG_FILE"; then
+    sed '/^KILLSWITCH_AUTO_DISABLE=/a\DISABLE_IPV6=true' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+  fi
+fi
+
+# Migrate HEALTH_MONITORING to AUTO_RECOVER (for upgrades)
+if grep -q "^HEALTH_MONITORING=" "$CONFIG_FILE" 2>/dev/null; then
+  # Rename HEALTH_MONITORING to AUTO_RECOVER
+  sed 's/^HEALTH_MONITORING=/AUTO_RECOVER=/' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+  mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+
+  # Rename old PID file if it exists
+  OLD_PID_FILE="$CONFIG_DIR/.health-monitor.pid"
+  NEW_PID_FILE="$CONFIG_DIR/.auto-recover.pid"
+  if [[ -f "$OLD_PID_FILE" ]]; then
+    mv "$OLD_PID_FILE" "$NEW_PID_FILE"
+  fi
+
+  # Rename old log file if it exists
+  OLD_LOG_FILE="$CONFIG_DIR/health-monitor.log"
+  NEW_LOG_FILE="$CONFIG_DIR/auto-recover.log"
+  if [[ -f "$OLD_LOG_FILE" ]]; then
+    mv "$OLD_LOG_FILE" "$NEW_LOG_FILE"
+  fi
+fi
+
+# Ensure AUTO_RECOVER exists in config (for upgrades)
+if ! grep -q "^AUTO_RECOVER=" "$CONFIG_FILE" 2>/dev/null; then
+  # Add after LAST_CONNECTED_SERVER
+  if grep -q "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE"; then
+    sed '/^LAST_CONNECTED_SERVER=/a\AUTO_RECOVER=true' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+  fi
+fi
+
+# Ensure AUTO_FAILOVER exists in config (for upgrades)
+if ! grep -q "^AUTO_FAILOVER=" "$CONFIG_FILE" 2>/dev/null; then
+  # Add after AUTO_RECOVER
+  if grep -q "^AUTO_RECOVER=" "$CONFIG_FILE"; then
+    sed '/^AUTO_RECOVER=/a\AUTO_FAILOVER=false' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+  fi
+fi
+
+echo "LazyVPN initialized"
+echo "Place your WireGuard config files in: $WG_DIR"

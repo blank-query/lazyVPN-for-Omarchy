@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Handle autostart/autoconnect logic
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lazyvpn-common
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+
+CONFIG_FILE="$HOME/.config/lazyvpn/config"
+
+# Wait for network to be ready (with timeout)
+info "Waiting for network connectivity..."
+NETWORK_READY=false
+for i in {1..30}; do
+  # Check if we have internet connectivity by pinging a reliable DNS server
+  if ping -c 1 -W 2 1.1.1.1 &>/dev/null; then
+    info "Network ready after ${i} seconds"
+    NETWORK_READY=true
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$NETWORK_READY" != "true" ]]; then
+  warn "Network not ready after 30 seconds, attempting autoconnect anyway..."
+fi
+
+# Double-check systemd-networkd is running
+if ! systemctl is-active --quiet systemd-networkd; then
+  error "systemd-networkd not running, aborting autoconnect"
+fi
+
+# Load config
+load_config "$CONFIG_FILE"
+
+# Only proceed if autoconnect is enabled
+if [[ "$AUTOCONNECT" != "true" ]]; then
+  exit 0
+fi
+
+# Determine which server to connect to
+case "$AUTOCONNECT_MODE" in
+  quickest)
+    lazyvpn-quickest
+    ;;
+  random)
+    lazyvpn-random
+    ;;
+  last_used)
+    if [[ -n "$LAST_CONNECTED_SERVER" ]]; then
+      lazyvpn-connect "$LAST_CONNECTED_SERVER"
+    else
+      # Fallback to random if no last used server
+      warn "No last used server found, connecting to random server"
+      lazyvpn-random
+    fi
+    ;;
+  specific)
+    if [[ -n "$AUTOCONNECT_SERVER" ]]; then
+      lazyvpn-connect "$AUTOCONNECT_SERVER"
+    else
+      warn "No specific server configured for autoconnect"
+    fi
+    ;;
+  *)
+    warn "Unknown autoconnect mode: $AUTOCONNECT_MODE"
+    ;;
+esac
