@@ -45,7 +45,7 @@
 -   **Smart Server Display**:
     -   **Automatic Server Renaming**: When adding servers, LazyVPN automatically renames them to a standardized format using provider detection, filename parsing, and IP geolocation as fallback.
     -   **Pretty Names**: Displays servers with full location names and country flags (e.g., `🇺🇸 United States - New York (123) • ProtonVPN`).
-    -   **Feature Emojis**: Visual indicators show server capabilities at a glance: 🔄 P2P, 🧅 Tor, 🛡️ Secure Core, 📺 Streaming, ⭐ Plus, 🆓 Free.
+    -   **Feature Emojis**: Visual indicators show server capabilities at a glance: 🔄 P2P/Torrenting, 🔒 Secure Core, 🧅 Tor, 🤡 Free Tier, 🚀 VPN Accelerator, 🗡️ NetShield Level 1, ⚔️ NetShield Level 2, 🎮 Moderate NAT.
     -   **Provider Detection**: Intelligently detects VPN providers (ProtonVPN, Mullvad, IVPN, PIA, NordVPN, Surfshark, etc.) from endpoint, DNS, or config file contents.
 -   **Connection Status**: The menu bar always shows your real-time status (`🟢 CONNECTED` or `🔴 DISCONNECTED`) and the currently connected server.
 -   **Seamless Server Switching**: Switches between servers gracefully, automatically updating firewall rules and routes.
@@ -160,11 +160,16 @@
 
 ## Standardized Server Naming
 
-When you add servers, LazyVPN automatically renames them to a consistent, machine-readable format that encodes location and features. This enables:
+### Why Automatic Renaming?
 
--   **Fast Display**: Location codes are expanded locally without network calls
--   **Consistent Organization**: All servers follow the same naming pattern
--   **Smart Sorting**: Easy to filter and search by location or features
+VPN providers often give configuration files inconsistent or generic names like `wg-US-FREE-27.conf`, `SE-31-TOR.conf`, or `server-uk-123.conf`. LazyVPN automatically renames these to a standardized, machine-readable format when you import them. This provides several key benefits:
+
+-   **Consistent Organization**: All servers follow the same naming pattern regardless of provider
+-   **Fast Display**: Location codes (like `US-WA`) are expanded locally to full names (`United States - Washington`) without network calls
+-   **Smart Filtering**: Easy to search and filter by country, state, city, or provider in the server picker
+-   **Duplicate Detection**: Prevents adding multiple servers to the same location
+-   **Feature Encoding**: Server capabilities are preserved in the filename for quick identification
+-   **Automatic Location Detection**: Uses IP geolocation as fallback when filenames don't contain location info
 
 ### Naming Format
 
@@ -191,6 +196,47 @@ When you add servers, LazyVPN automatically renames them to a consistent, machin
 6.  **Standardized Naming**: Saves the file with the new name and displays it with full location names and emoji indicators
 
 You never need to manually rename files — LazyVPN handles it all automatically!
+
+## Server Feature Emojis
+
+LazyVPN automatically detects and displays server features using visual emoji indicators. These emojis appear next to server names throughout the interface, allowing you to quickly identify server capabilities at a glance.
+
+### Feature Detection
+
+All features are automatically detected from WireGuard configuration files when servers are added. No manual configuration required!
+
+| Emoji | Feature | What It Means | Detection Source |
+|-------|---------|---------------|------------------|
+| 🔄 | **P2P / Torrenting** | Port forwarding enabled for peer-to-peer file sharing and torrenting | `# NAT-PMP (Port Forwarding) = on` in config |
+| 🔒 | **Secure Core** | Multi-hop VPN routing through privacy-friendly countries (CH/IS/SE) for enhanced security | Peer comment pattern: `CH/IS/SE-[EXIT_COUNTRY]#N` |
+| 🧅 | **Tor Routing** | Routes traffic through Tor network for maximum anonymity | Peer comment contains `-TOR` |
+| 🤡 | **Free Tier** | Free plan server (limited features) | Peer comment contains `FREE` |
+| 🚀 | **VPN Accelerator** | ProtonVPN's speed enhancement technology (up to 400% faster) | `# VPN Accelerator = on` in config |
+| 🗡️ | **NetShield Level 1** | Malware blocking only | `# NetShield = 1` in config |
+| ⚔️ | **NetShield Level 2** | Malware + ad/tracker blocking (full protection) | `# NetShield = 2` in config |
+| 🎮 | **Moderate NAT** | Optimized for gaming and P2P with reduced IP randomization | `# Moderate NAT = on` in config |
+
+### Example Server Displays
+
+```
+🇸🇪 Sweden - Alberta, Roslagen (1) 🔄🔒🚀 • ProtonVPN
+    └─ Has: P2P support, Secure Core multi-hop, VPN Accelerator
+
+🇺🇸 United States - Washington, Seattle (27) 🔄🤡🗡️ • ProtonVPN
+    └─ Has: P2P support, Free tier, NetShield Level 1
+
+🇸🇪 Sweden - Alberta, Stockholm (31) 🔄🧅🗡️ • ProtonVPN
+    └─ Has: P2P support, Tor routing, NetShield Level 1
+
+🇦🇱 Albania - Tirana (52) ⚔️🎮 • ProtonVPN
+    └─ Has: NetShield Level 2 (full ad blocking), Moderate NAT (gaming)
+```
+
+### Provider-Specific Features
+
+Currently, all feature detection is optimized for **ProtonVPN** configuration formats. Support for other providers' feature detection may be added in future updates.
+
+**Secure Core Multi-Hop**: Entry countries are always privacy-friendly jurisdictions (Switzerland 🇨🇭, Iceland 🇮🇸, or Sweden 🇸🇪) that route to your chosen exit country.
 
 ## Usage
 
