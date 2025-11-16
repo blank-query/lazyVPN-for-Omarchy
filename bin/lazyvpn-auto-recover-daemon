@@ -85,6 +85,9 @@ while true; do
     continue
   fi
 
+  # Get pretty server name for display
+  PRETTY_SERVER=$(get_pretty_server_name "$LAST_SERVER" "$SCRIPT_DIR")
+
   # Get VPN gateway from config
   WG_DIR="$CONFIG_DIR/wireguard"
   VPN_CONFIG="$WG_DIR/${LAST_SERVER}.conf"
@@ -109,7 +112,7 @@ while true; do
     # Connection healthy
     if [[ $CONSECUTIVE_FAILURES -gt 0 ]]; then
       log_message "Connection restored to $LAST_SERVER"
-      notify "VPN connection restored to $LAST_SERVER"
+      notify "VPN connection restored to $PRETTY_SERVER"
     fi
     CONSECUTIVE_FAILURES=0
   else
@@ -119,12 +122,12 @@ while true; do
 
     if [[ $CONSECUTIVE_FAILURES -ge $MAX_FAILURES ]]; then
       log_message "Connection to $LAST_SERVER failed. Attempting reconnect..."
-      notify "VPN connection lost!\nAttempting to reconnect to $LAST_SERVER..."
+      notify "VPN connection lost!\nAttempting to reconnect to $PRETTY_SERVER..."
 
       # Attempt reconnect
       if "$SCRIPT_DIR/lazyvpn-connect" "$LAST_SERVER" >> "$LOG_FILE" 2>&1; then
         log_message "Successfully reconnected to $LAST_SERVER"
-        notify "VPN reconnected successfully to $LAST_SERVER"
+        notify "VPN reconnected successfully to $PRETTY_SERVER"
         CONSECUTIVE_FAILURES=0
       else
         log_message "Failed to reconnect to $LAST_SERVER"

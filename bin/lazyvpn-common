@@ -303,7 +303,87 @@ record_performance() {
     fi
 }
 
-# Get pretty formatted server name: "🇸🇪 SE #130 - ProtonVPN"
+# Expand country codes to full names
+expand_country_name() {
+    local code="$1"
+
+    declare -A countries=(
+        [US]="United States" [GB]="United Kingdom" [CA]="Canada" [AU]="Australia" [NZ]="New Zealand"
+        [DE]="Germany" [FR]="France" [IT]="Italy" [ES]="Spain" [PT]="Portugal" [NL]="Netherlands"
+        [BE]="Belgium" [CH]="Switzerland" [AT]="Austria" [SE]="Sweden" [NO]="Norway" [DK]="Denmark"
+        [FI]="Finland" [IS]="Iceland" [IE]="Ireland" [PL]="Poland" [CZ]="Czech Republic"
+        [HU]="Hungary" [RO]="Romania" [BG]="Bulgaria" [GR]="Greece" [TR]="Turkey" [IL]="Israel"
+        [IN]="India" [JP]="Japan" [KR]="South Korea" [CN]="China" [HK]="Hong Kong" [TW]="Taiwan"
+        [SG]="Singapore" [MY]="Malaysia" [TH]="Thailand" [VN]="Vietnam" [ID]="Indonesia" [PH]="Philippines"
+        [BR]="Brazil" [AR]="Argentina" [CL]="Chile" [MX]="Mexico" [CO]="Colombia" [PE]="Peru"
+        [ZA]="South Africa" [EG]="Egypt" [KE]="Kenya" [NG]="Nigeria" [MA]="Morocco"
+        [RU]="Russia" [UA]="Ukraine" [BY]="Belarus" [KZ]="Kazakhstan"
+        [AE]="UAE" [SA]="Saudi Arabia" [QA]="Qatar" [OM]="Oman" [KW]="Kuwait"
+        [CR]="Costa Rica" [PA]="Panama" [UY]="Uruguay" [VE]="Venezuela"
+        [LU]="Luxembourg" [LV]="Latvia" [LT]="Lithuania" [EE]="Estonia" [SK]="Slovakia"
+        [SI]="Slovenia" [HR]="Croatia" [RS]="Serbia" [BA]="Bosnia" [MK]="North Macedonia"
+        [AL]="Albania" [MT]="Malta" [CY]="Cyprus" [GE]="Georgia" [AM]="Armenia" [AZ]="Azerbaijan"
+    )
+
+    if [[ -n "${countries[$code]}" ]]; then
+        echo "${countries[$code]}"
+    else
+        # Return original if no mapping found
+        echo "$code"
+    fi
+}
+
+# Expand location codes to full names
+expand_location_name() {
+    local code="$1"
+
+    # US State codes
+    declare -A us_states=(
+        [AL]="Alabama" [AK]="Alaska" [AZ]="Arizona" [AR]="Arkansas" [CA]="California"
+        [CO]="Colorado" [CT]="Connecticut" [DE]="Delaware" [FL]="Florida" [GA]="Georgia"
+        [HI]="Hawaii" [ID]="Idaho" [IL]="Illinois" [IN]="Indiana" [IA]="Iowa"
+        [KS]="Kansas" [KY]="Kentucky" [LA]="Louisiana" [ME]="Maine" [MD]="Maryland"
+        [MA]="Massachusetts" [MI]="Michigan" [MN]="Minnesota" [MS]="Mississippi" [MO]="Missouri"
+        [MT]="Montana" [NE]="Nebraska" [NV]="Nevada" [NH]="New Hampshire" [NJ]="New Jersey"
+        [NM]="New Mexico" [NY]="New York" [NC]="North Carolina" [ND]="North Dakota" [OH]="Ohio"
+        [OK]="Oklahoma" [OR]="Oregon" [PA]="Pennsylvania" [RI]="Rhode Island" [SC]="South Carolina"
+        [SD]="South Dakota" [TN]="Tennessee" [TX]="Texas" [UT]="Utah" [VT]="Vermont"
+        [VA]="Virginia" [WA]="Washington" [WV]="West Virginia" [WI]="Wisconsin" [WY]="Wyoming"
+        [DC]="Washington DC"
+    )
+
+    # Common city codes (ProtonVPN and others)
+    declare -A city_codes=(
+        [NYC]="New York City" [LA]="Los Angeles" [SF]="San Francisco" [CHI]="Chicago"
+        [MIA]="Miami" [SEA]="Seattle" [DEN]="Denver" [ATL]="Atlanta" [PHX]="Phoenix"
+        [DAL]="Dallas" [PHI]="Philadelphia" [HOU]="Houston" [BOS]="Boston" [DET]="Detroit"
+        [LV]="Las Vegas" [PDX]="Portland" [SLC]="Salt Lake City" [SAN]="San Diego"
+        [LON]="London" [PAR]="Paris" [BER]="Berlin" [AMS]="Amsterdam" [ZUR]="Zurich"
+        [FRA]="Frankfurt" [MIL]="Milan" [ROM]="Rome" [MAD]="Madrid" [BAR]="Barcelona"
+        [VIE]="Vienna" [BRU]="Brussels" [OSL]="Oslo" [STO]="Stockholm" [HEL]="Helsinki"
+        [WAR]="Warsaw" [PRA]="Prague" [BUD]="Budapest" [DUB]="Dublin" [CPH]="Copenhagen"
+        [LIS]="Lisbon" [ATH]="Athens" [BUC]="Bucharest" [SOF]="Sofia" [IST]="Istanbul"
+        [TYO]="Tokyo" [SEO]="Seoul" [SIN]="Singapore" [HKG]="Hong Kong" [SYD]="Sydney"
+        [MEL]="Melbourne" [TOR]="Toronto" [MON]="Montreal" [VAN]="Vancouver"
+    )
+
+    # Check if it's a US state code
+    if [[ -n "${us_states[$code]}" ]]; then
+        echo "${us_states[$code]}"
+        return
+    fi
+
+    # Check if it's a known city code
+    if [[ -n "${city_codes[$code]}" ]]; then
+        echo "${city_codes[$code]}"
+        return
+    fi
+
+    # Return original if no mapping found
+    echo "$code"
+}
+
+# Get pretty formatted server name: "🇺🇸 US - New York #123" or "🇺🇸 US - California, Los Angeles (123)"
 get_pretty_server_name() {
     local server_name="$1"
     local script_dir="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -318,39 +398,278 @@ get_pretty_server_name() {
         return
     fi
 
-    local country city number provider
+    local country state city number provider services
     country=$(echo "$info_output" | grep "^country=" | cut -d= -f2)
+    state=$(echo "$info_output" | grep "^state=" | cut -d= -f2)
     city=$(echo "$info_output" | grep "^city=" | cut -d= -f2)
     number=$(echo "$info_output" | grep "^number=" | cut -d= -f2)
     provider=$(echo "$info_output" | grep "^provider=" | cut -d= -f2)
+    services=$(echo "$info_output" | grep "^services=" | cut -d= -f2)
 
     # Build pretty name
     local pretty_name=""
+    local flag=""
 
     # Add flag if country is known
     if [[ -n "$country" ]] && [[ "$country" != "Unknown" ]]; then
-        local flag
         flag=$(country_flag "$country")
-        pretty_name="$flag $country"
     else
         pretty_name="$server_name"
         return
     fi
 
-    # Add city if available
-    if [[ -n "$city" ]]; then
-        pretty_name="$pretty_name-$city"
+    # Add state and/or city with smart formatting
+    if [[ -n "$state" ]] && [[ -n "$city" ]]; then
+        # Both state and city
+        local expanded_country expanded_state expanded_city
+        expanded_country=$(expand_country_name "$country")
+        expanded_state=$(expand_location_name "$state")
+        expanded_city=$(expand_location_name "$city")
+
+        # Special case for DC (Washington DC)
+        if [[ "$state" == "DC" ]] && [[ "$city" == "Washington" ]]; then
+            pretty_name="$flag $expanded_country - Washington DC"
+        else
+            # Regular state+city: "🇺🇸 United States - California, Los Angeles"
+            pretty_name="$flag $expanded_country - $expanded_state, $expanded_city"
+        fi
+    elif [[ -n "$city" ]]; then
+        # Just city/location: "🇺🇸 United States - New York"
+        local expanded_country expanded_city
+        expanded_country=$(expand_country_name "$country")
+        expanded_city=$(expand_location_name "$city")
+
+        # Check if city looks like a US state code (2 uppercase letters)
+        if [[ "$city" =~ ^[A-Z]{2}$ ]] && [[ "$country" == "US" ]]; then
+            # It's a US state - format as "United States - State Name"
+            pretty_name="$flag $expanded_country - $expanded_city"
+        else
+            # Regular city/location
+            pretty_name="$flag $expanded_country - $expanded_city"
+        fi
+    else
+        # No city or state: "🇸🇪 Sweden"
+        local expanded_country
+        expanded_country=$(expand_country_name "$country")
+        pretty_name="$flag $expanded_country"
     fi
 
-    # Add server number if available
+    # Add server number with parentheses if available
     if [[ -n "$number" ]]; then
-        pretty_name="$pretty_name #$number"
+        pretty_name="$pretty_name ($number)"
+    fi
+
+    # Add feature emojis based on services
+    local feature_emojis=""
+    if [[ -n "$services" ]]; then
+        # P2P support
+        if [[ "$services" == *"p2p"* ]]; then
+            feature_emojis="${feature_emojis}🔄"
+        fi
+        # Tor support
+        if [[ "$services" == *"tor"* ]]; then
+            feature_emojis="${feature_emojis}🧅"
+        fi
+        # Secure Core
+        if [[ "$services" == *"securecore"* ]]; then
+            feature_emojis="${feature_emojis}🛡️"
+        fi
+        # Streaming
+        if [[ "$services" == *"streaming"* ]]; then
+            feature_emojis="${feature_emojis}📺"
+        fi
+        # Plus/Premium tier
+        if [[ "$services" == *"plus"* ]]; then
+            feature_emojis="${feature_emojis}⭐"
+        fi
+        # Free tier
+        if [[ "$services" == *"free"* ]]; then
+            feature_emojis="${feature_emojis}🆓"
+        fi
+    fi
+
+    # Add feature emojis if any were found
+    if [[ -n "$feature_emojis" ]]; then
+        pretty_name="$pretty_name $feature_emojis"
     fi
 
     # Add provider if known
     if [[ -n "$provider" ]]; then
-        pretty_name="$pretty_name - $provider"
+        pretty_name="$pretty_name • $provider"
     fi
 
     echo "$pretty_name"
+}
+
+# Generate standardized server filename from a config file
+# Input: config file path, destination directory
+# Output: standardized filename (without .conf extension)
+# Example: "Proton-US-NY#123" or "Mullvad-SE-Stockholm#5"
+generate_standard_server_name() {
+    local config_file="$1"
+    local dest_dir="$2"
+    local original_name=$(basename "$config_file" .conf)
+
+    # Parse config for endpoint
+    local endpoint=$(grep -m1 "^Endpoint" "$config_file" | cut -d= -f2 | tr -d ' ')
+    local server_ip=$(echo "$endpoint" | cut -d: -f1)
+
+    # Detect provider
+    local provider=""
+    local dns=$(grep -m1 "^DNS" "$config_file" | cut -d= -f2 | tr -d ' ')
+
+    # Provider detection (same logic as lazyvpn-get-server-info)
+    case "$dns" in
+        10.2.0.1) provider="Proton" ;;
+        10.64.0.1|193.138.218.74) provider="Mullvad" ;;
+        172.16.0.1) provider="IVPN" ;;
+        10.0.0.241|10.0.0.242) provider="PIA" ;;
+    esac
+
+    # Also check endpoint and comments
+    if [[ -z "$provider" ]]; then
+        if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]] || grep -qi "protonvpn" "$config_file"; then
+            provider="Proton"
+        elif [[ "$endpoint" =~ mullvad\.net ]] || grep -qi "mullvad" "$config_file"; then
+            provider="Mullvad"
+        elif [[ "$endpoint" =~ ivpn\.net ]] || grep -qi "ivpn" "$config_file"; then
+            provider="IVPN"
+        elif [[ "$endpoint" =~ privateinternetaccess\.com ]]; then
+            provider="PIA"
+        elif [[ "$endpoint" =~ nordvpn\.com ]] || grep -qi "nordvpn" "$config_file"; then
+            provider="Nord"
+        elif [[ "$endpoint" =~ surfshark\.com ]] || grep -qi "surfshark" "$config_file"; then
+            provider="Surf"
+        fi
+    fi
+
+    # Try to parse location from original filename
+    local parse_name="$original_name"
+    # Strip provider prefix
+    parse_name=$(echo "$parse_name" | sed -E 's/^(proton|mullvad|ivpn|pia|nord|surf|wg|vpn|server)-//i')
+
+    local country="" state="" city="" number=""
+
+    # Try to extract location from filename
+    if [[ "$parse_name" =~ ^([A-Z]{2})[-_]([A-Z]{2})[-_]([A-Za-z]+)[-_#]([0-9]+) ]]; then
+        # US-CA-LosAngeles#123
+        country="${BASH_REMATCH[1]}"
+        state="${BASH_REMATCH[2]}"
+        city="${BASH_REMATCH[3]}"
+        number="${BASH_REMATCH[4]}"
+    elif [[ "$parse_name" =~ ^([A-Z]{2,})[-_]([A-Za-z]+)[-_#]([0-9]+) ]]; then
+        # SE-Stockholm-130 or US-DC-30
+        country="${BASH_REMATCH[1]}"
+        city="${BASH_REMATCH[2]}"
+        number="${BASH_REMATCH[3]}"
+    elif [[ "$parse_name" =~ ^([A-Z]{2,})[-_]([0-9]+) ]]; then
+        # SE-130 or US-30
+        country="${BASH_REMATCH[1]}"
+        number="${BASH_REMATCH[2]}"
+    elif [[ "$parse_name" =~ ^([A-Z]{2,})#([0-9]+) ]]; then
+        # SE#130
+        country="${BASH_REMATCH[1]}"
+        number="${BASH_REMATCH[2]}"
+    fi
+
+    # If filename parsing failed, use IP geolocation
+    if [[ -z "$country" ]] && [[ -n "$server_ip" ]]; then
+        # Use temporary geolocation lookup (no cache for this one-time operation)
+        local response
+        response=$(curl -s --connect-timeout 5 --max-time 10 \
+            "http://ip-api.com/json/${server_ip}?fields=status,countryCode,region,city" 2>/dev/null)
+
+        if [[ $? -eq 0 ]] && [[ -n "$response" ]]; then
+            local status=$(echo "$response" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+            if [[ "$status" == "success" ]]; then
+                country=$(echo "$response" | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
+                local geo_city=$(echo "$response" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
+                local geo_region=$(echo "$response" | grep -o '"region":"[^"]*"' | cut -d'"' -f4)
+
+                # For US, use region as state
+                if [[ "$country" == "US" ]] && [[ -n "$geo_region" ]]; then
+                    state="$geo_region"
+                fi
+
+                # Use city (clean it for filename)
+                if [[ -n "$geo_city" ]]; then
+                    city=$(echo "$geo_city" | tr -d ' ')
+                fi
+            fi
+        fi
+    fi
+
+    # Detect features from filename and config
+    local features=""
+    if [[ "$original_name" =~ [Pp]2[Pp] ]] || grep -qiw "p2p" "$config_file" 2>/dev/null; then
+        features="${features:+$features-}P2P"
+    fi
+    if [[ "$original_name" =~ -[Tt]or- ]] || [[ "$original_name" =~ -[Tt]or$ ]] || [[ "$original_name" =~ ^[Tt]or- ]] || grep -qiE '\btor\b' "$config_file" 2>/dev/null; then
+        features="${features:+$features-}Tor"
+    fi
+    if [[ "$original_name" =~ [Ss]ecure[_-]?[Cc]ore ]] || grep -qiE 'secure.core|securecore' "$config_file" 2>/dev/null; then
+        features="${features:+$features-}SC"
+    fi
+    if [[ "$original_name" =~ [Ss]treaming ]] || grep -qiw "streaming" "$config_file" 2>/dev/null; then
+        features="${features:+$features-}Stream"
+    fi
+
+    # Generate number if missing (find next available)
+    if [[ -z "$number" ]] && [[ -n "$dest_dir" ]]; then
+        # Find existing servers with same location
+        local max_num=0
+        local search_pattern="${provider:+$provider-}${country}${state:+-$state}${city:+-$city}${features:+-$features}#"
+
+        shopt -s nullglob
+        for existing in "$dest_dir"/*.conf; do
+            local existing_base=$(basename "$existing" .conf)
+            if [[ "$existing_base" =~ ^${search_pattern}([0-9]+)$ ]]; then
+                local num="${BASH_REMATCH[1]}"
+                if [[ $num -gt $max_num ]]; then
+                    max_num=$num
+                fi
+            fi
+        done
+        shopt -u nullglob
+        number=$((max_num + 1))
+    fi
+
+    # Build standardized name
+    local std_name=""
+
+    # Add provider prefix
+    if [[ -n "$provider" ]]; then
+        std_name="$provider"
+    fi
+
+    # Add country
+    if [[ -n "$country" ]]; then
+        std_name="${std_name:+$std_name-}${country}"
+    else
+        # Fallback: keep original name if we couldn't determine location
+        echo "$original_name"
+        return
+    fi
+
+    # Add state (US only)
+    if [[ -n "$state" ]]; then
+        std_name="${std_name}-${state}"
+    fi
+
+    # Add city
+    if [[ -n "$city" ]]; then
+        std_name="${std_name}-${city}"
+    fi
+
+    # Add features
+    if [[ -n "$features" ]]; then
+        std_name="${std_name}-${features}"
+    fi
+
+    # Add number
+    if [[ -n "$number" ]]; then
+        std_name="${std_name}#${number}"
+    fi
+
+    echo "$std_name"
 }

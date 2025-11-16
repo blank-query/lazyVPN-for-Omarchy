@@ -33,7 +33,7 @@ if [[ "$KILLSWITCH" == "true" ]]; then
 fi
 
 if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-  notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+  notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
   echo "Error: No WireGuard configurations found in $WG_DIR"
   exit 1
 fi

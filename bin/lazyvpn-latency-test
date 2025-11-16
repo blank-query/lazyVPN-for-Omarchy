@@ -22,7 +22,10 @@ if [[ ! -f "$CONF_FILE" ]]; then
   exit 1
 fi
 
-info "Testing latency for $SERVER_NAME..."
+# Get pretty server name for display
+PRETTY_SERVER=$(get_pretty_server_name "$SERVER_NAME" "$SCRIPT_DIR")
+
+info "Testing latency for $PRETTY_SERVER..."
 
 # Extract endpoint IP
 endpoint=$(grep -m1 "^Endpoint" "$CONF_FILE" | cut -d= -f2 | tr -d ' ')

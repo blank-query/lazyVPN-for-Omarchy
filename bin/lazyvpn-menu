@@ -248,7 +248,7 @@ show_random() {
 
   # Check if configs exist
   if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
     back_to show_main_menu
     return
   fi
@@ -261,7 +261,7 @@ show_quickest() {
 
   # Check if configs exist
   if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
     back_to show_main_menu
     return
   fi
@@ -274,7 +274,7 @@ show_speedtest_all() {
 
   # Check if configs exist
   if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
     back_to show_main_menu
     return
   fi
@@ -290,7 +290,7 @@ show_choose_server_menu() {
 
   # Check if configs exist
   if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
     back_to show_connections_menu
     return
   fi
