@@ -437,12 +437,39 @@ get_pretty_server_name() {
     local pretty_name=""
     local flag=""
 
-    # Add flag if country is known
-    if [[ -n "$country" ]] && [[ "$country" != "Unknown" ]]; then
-        flag=$(country_flag "$country")
+    # Check if this is a Secure Core server (multi-hop)
+    local is_secure_core=false
+    local entry_country=""
+    local exit_country=""
+    if [[ ",$services," == *",securecore,"* ]]; then
+        is_secure_core=true
+        # For Secure Core servers:
+        # - country field = ENTRY country (CH, IS, SE)
+        # - Exit country is in city OR state field (whichever is the second component)
+        entry_country="$country"
+
+        # Exit country can be in city (if 3+ components) or state (if 2 components)
+        if [[ -n "$city" ]]; then
+            exit_country="$city"
+        elif [[ -n "$state" ]]; then
+            exit_country="$state"
+        fi
+
+        # Build dual flag for Secure Core
+        if [[ -n "$entry_country" ]] && [[ -n "$exit_country" ]]; then
+            flag="$(country_flag "$entry_country")→$(country_flag "$exit_country")"
+        else
+            # Fallback to single flag if parsing failed
+            flag=$(country_flag "$country")
+        fi
     else
-        pretty_name="$server_name"
-        return
+        # Regular server - single flag
+        if [[ -n "$country" ]] && [[ "$country" != "Unknown" ]]; then
+            flag=$(country_flag "$country")
+        else
+            pretty_name="$server_name"
+            return
+        fi
     fi
 
     # Add state and/or city with smart formatting
@@ -453,19 +480,33 @@ get_pretty_server_name() {
         expanded_state=$(expand_location_name "$state")
         expanded_city=$(expand_location_name "$city")
 
-        # Special case for DC (Washington DC)
-        if [[ "$state" == "DC" ]] && [[ "$city" == "Washington" ]]; then
+        # Special case for Secure Core: show entry→exit country names
+        if [[ "$is_secure_core" == true ]]; then
+            local exit_country_name
+            exit_country_name=$(expand_country_name "$exit_country")
+            pretty_name="$flag $expanded_country → $exit_country_name"
+        # Special case for DC (Washington DC is a city-state)
+        elif [[ "$state" == "DC" ]] && { [[ "$city" == "Washington" ]] || [[ "$city" == "DC" ]]; }; then
             pretty_name="$flag $expanded_country - Washington DC"
         else
             # Regular state+city: "🇺🇸 United States - California, Los Angeles"
             pretty_name="$flag $expanded_country - $expanded_state, $expanded_city"
         fi
     elif [[ -n "$state" ]]; then
-        # Just state, no city: "🇺🇸 United States - New York" or "🇸🇪 Sweden - Stockholm"
+        # Just state, no city
         local expanded_country expanded_state
         expanded_country=$(expand_country_name "$country")
         expanded_state=$(expand_location_name "$state")
-        pretty_name="$flag $expanded_country - $expanded_state"
+
+        # Special case for Secure Core: state field contains exit country
+        if [[ "$is_secure_core" == true ]]; then
+            local exit_country_name
+            exit_country_name=$(expand_country_name "$exit_country")
+            pretty_name="$flag $expanded_country → $exit_country_name"
+        else
+            # Regular: "🇺🇸 United States - New York" or "🇸🇪 Sweden - Stockholm"
+            pretty_name="$flag $expanded_country - $expanded_state"
+        fi
     elif [[ -n "$city" ]]; then
         # Just city/location: "🇺🇸 United States - New York"
         local expanded_country expanded_city
