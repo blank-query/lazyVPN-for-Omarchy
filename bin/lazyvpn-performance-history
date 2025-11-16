@@ -32,11 +32,10 @@ if [[ -z "$SERVER_NAME" ]]; then
     exit 0
   fi
 
-  echo "═══════════════════════════════════════════════════════════════════════════════════"
-  printf "%-50s %10s %10s %8s\n" "Server" "Avg Speed" "Avg Latency" "Tests"
-  echo "═══════════════════════════════════════════════════════════════════════════════════"
+  # First pass: collect all data and calculate max name length
+  TEMP_RESULTS=$(mktemp)
+  MAX_NAME_LEN=0
 
-  # Process each server's performance log
   for perf_file in "$PERF_DIR"/*.log; do
     [[ ! -f "$perf_file" ]] && continue
 
@@ -47,6 +46,15 @@ if [[ -z "$SERVER_NAME" ]]; then
       pretty_name="🌐 Direct (Non-VPN)"
     else
       pretty_name=$(get_pretty_server_name "$server" "$SCRIPT_DIR")
+    fi
+
+    # Calculate display width with emoji compensation
+    NAME_LEN=${#pretty_name}
+    emoji_count=$(echo "$pretty_name" | grep -o "🇦\|🇧\|🇨\|🇩\|🇪\|🇫\|🇬\|🇭\|🇮\|🇯\|🇰\|🇱\|🇲\|🇳\|🇴\|🇵\|🇶\|🇷\|🇸\|🇹\|🇺\|🇻\|🇼\|🇽\|🇾\|🇿\|🌐" | wc -l)
+    ((NAME_LEN+=emoji_count))
+
+    if [[ $NAME_LEN -gt $MAX_NAME_LEN ]]; then
+      MAX_NAME_LEN=$NAME_LEN
     fi
 
     # Calculate averages
@@ -80,23 +88,41 @@ if [[ -z "$SERVER_NAME" ]]; then
 
     total_tests=$((speed_count + latency_count))
 
-    # Format output
+    # Store results for sorting
+    echo "$pretty_name|$avg_speed|$avg_latency|$total_tests" >> "$TEMP_RESULTS"
+  done
+
+  # Add padding
+  ((MAX_NAME_LEN+=3))
+
+  # Print header
+  echo "════════════════════════════════════════════════════════════════════════════════════════════"
+  printf "%-${MAX_NAME_LEN}s  %12s  %12s  %s\n" "SERVER" "AVG SPEED" "AVG LATENCY" "TESTS"
+  printf "%${MAX_NAME_LEN}s  %12s  %12s  %s\n" | tr ' ' '─'
+
+  # Second pass: display sorted results
+  sort -t'|' -k2 -rn "$TEMP_RESULTS" 2>/dev/null | while IFS='|' read -r pretty_name avg_speed avg_latency total_tests; do
+    # Format speed column
     if [[ "$avg_speed" != "N/A" ]]; then
-      printf "%-50s %8s Mbps" "$pretty_name" "$avg_speed"
+      speed_col=$(printf "%8.2f Mbps" "$avg_speed")
     else
-      printf "%-50s %10s" "$pretty_name" "N/A"
+      speed_col="N/A"
     fi
 
+    # Format latency column
     if [[ "$avg_latency" != "N/A" ]]; then
-      printf " %8s ms" "$avg_latency"
+      latency_col=$(printf "%7d ms" "$avg_latency")
     else
-      printf " %10s" "N/A"
+      latency_col="N/A"
     fi
 
-    printf " %6s\n" "$total_tests"
-  done | sort -t'|' -k2 -rn 2>/dev/null || cat
+    printf "%-${MAX_NAME_LEN}s  %12s  %12s  %5d\n" "$pretty_name" "$speed_col" "$latency_col" "$total_tests"
+  done
 
-  echo "═══════════════════════════════════════════════════════════════════════════════════"
+  rm -f "$TEMP_RESULTS"
+
+  echo ""
+  echo "════════════════════════════════════════════════════════════════════════════════════════════"
 else
   # Show detailed history for specific server
   if [[ "$SERVER_NAME" == "DIRECT" ]]; then
