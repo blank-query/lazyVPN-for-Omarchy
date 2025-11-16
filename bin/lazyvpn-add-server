@@ -212,11 +212,23 @@ while IFS='|' read -r display_name file_path validation_status is_duplicate; do
     ((SKIPPED_INVALID++))
   # Copy if valid and not duplicate
   else
-    cp "$file_path" "$WG_DIR/"
-    # Show pretty name for what was copied
-    pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
-    echo "  ✓ Copied: $pretty_name"
-    ((COPIED++))
+    # Generate standardized filename
+    std_name=$(generate_standard_server_name "$file_path" "$WG_DIR")
+
+    # Check if standardized name already exists
+    if [[ -f "$WG_DIR/${std_name}.conf" ]]; then
+      echo "  ⚠ Skipped (duplicate location): $std_name"
+      ((SKIPPED_DUPLICATE++))
+    else
+      # Copy with standardized name
+      cp "$file_path" "$WG_DIR/${std_name}.conf"
+      # Show pretty name for what was copied
+      pretty_name=$(get_pretty_server_name "$std_name" "$SCRIPT_DIR")
+      echo "  ✓ Added: $pretty_name"
+      echo "    Original: $filename"
+      echo "    Renamed: $std_name"
+      ((COPIED++))
+    fi
   fi
 done <<< "$SELECTED"
 

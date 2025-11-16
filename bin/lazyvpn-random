@@ -17,7 +17,7 @@ fi
 SERVER=$(find "$WG_DIR" -name '*.conf' -print0 | shuf -n 1 -z | xargs -0 basename | sed 's/\.conf$//')
 
 if [ -z "$SERVER" ]; then
-  notify "No WireGuard configs found. Place .conf files in:\n$WG_DIR"
+  notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
   error "No VPN servers found"
 fi
 

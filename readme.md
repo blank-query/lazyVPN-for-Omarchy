@@ -14,6 +14,7 @@
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [First-Time Setup](#first-time-setup)
+- [Standardized Server Naming](#standardized-server-naming)
 - [Usage](#usage)
 - [Menu Structure](#menu-structure)
 - [Uninstallation](#uninstallation)
@@ -42,8 +43,10 @@
     -   **🌍 Choose Server**: Select a server from a filterable, `fzf`-powered list with a detailed preview panel.
     -   **🔄 Last Used Server**: Instantly reconnect to your most recent server.
 -   **Smart Server Display**:
-    -   **Pretty Names**: Automatically parses filenames (e.g., `Proton-US-NY#123.conf`) into beautifully formatted names with country flags (e.g., `🇺🇸 US-NY #123 - ProtonVPN`).
-    -   **Provider Detection**: Intelligently detects the VPN provider (ProtonVPN, Mullvad, IVPN, etc.) from the filename, endpoint, DNS, or even comments within the `.conf` file.
+    -   **Automatic Server Renaming**: When adding servers, LazyVPN automatically renames them to a standardized format using provider detection, filename parsing, and IP geolocation as fallback.
+    -   **Pretty Names**: Displays servers with full location names and country flags (e.g., `🇺🇸 United States - New York (123) • ProtonVPN`).
+    -   **Feature Emojis**: Visual indicators show server capabilities at a glance: 🔄 P2P, 🧅 Tor, 🛡️ Secure Core, 📺 Streaming, ⭐ Plus, 🆓 Free.
+    -   **Provider Detection**: Intelligently detects VPN providers (ProtonVPN, Mullvad, IVPN, PIA, NordVPN, Surfshark, etc.) from endpoint, DNS, or config file contents.
 -   **Connection Status**: The menu bar always shows your real-time status (`🟢 CONNECTED` or `🔴 DISCONNECTED`) and the currently connected server.
 -   **Seamless Server Switching**: Switches between servers gracefully, automatically updating firewall rules and routes.
 
@@ -80,7 +83,7 @@
         -   Connect to a `random` server.
         -   Connect to a `specific` server of your choice.
 -   **➕ Easy Server Management**:
-    -   **Add Servers**: A guided `fzf` interface to import `.conf` files from `~/Downloads` with automatic validation and duplicate detection.
+    -   **Add Servers**: A guided `fzf` interface to import `.conf` files from `~/Downloads` with automatic validation, provider detection, location detection (via IP geolocation if needed), standardized renaming, and duplicate prevention.
     -   **Remove Servers**: Safely remove servers with automatic cleanup of performance history and configuration references.
     -   Both accessible from `⚙️ Options` submenu.
 -   **✏️ Interface Renaming**: Easily rename the network interface (e.g., from `wg0` to `lazyvpn`) directly from the menu.
@@ -150,12 +153,44 @@
 ## First-Time Setup
 
 1.  **Get WireGuard Files**: Download `.conf` files from your VPN provider.
-2.  **Add Servers**:
-    -   Place the `.conf` files in `~/.config/lazyvpn/wireguard/`.
-    -   **OR**, run LazyVPN (`SUPER+L`) and choose `➕ Add New Server` to import them from your `~/Downloads` folder.
-3.  **Rename Files (Recommended)**: For the best experience, rename your files for the smart parser.
-    -   **Format**: `[Provider-]CountryCode-City#Number.conf`
-    -   **Examples**: `Proton-US-NY#123.conf`, `Mullvad-SE-Stockholm#5.conf`
+2.  **Add Servers**: Run LazyVPN (`SUPER+L`) and choose `➕ Add New Server` to import them from your `~/Downloads` folder.
+    -   LazyVPN automatically validates, detects providers, determines locations (using IP geolocation if needed), and renames files to a standardized format.
+    -   Duplicate detection prevents adding servers to the same location twice.
+    -   You'll see both the original filename and the new standardized name during import.
+
+## Standardized Server Naming
+
+When you add servers, LazyVPN automatically renames them to a consistent, machine-readable format that encodes location and features. This enables:
+
+-   **Fast Display**: Location codes are expanded locally without network calls
+-   **Consistent Organization**: All servers follow the same naming pattern
+-   **Smart Sorting**: Easy to filter and search by location or features
+
+### Naming Format
+
+```
+[Provider-]Country[-State][-City][-Features]#Number
+```
+
+### Examples
+
+-   `Proton-US-NY#123` → 🇺🇸 United States - New York (123) • ProtonVPN
+-   `Mullvad-SE-Stockholm#5` → 🇸🇪 Sweden - Stockholm (5) • Mullvad
+-   `IVPN-NL-Amsterdam-P2P#3` → 🇳🇱 Netherlands - Amsterdam (3) 🔄 • IVPN
+-   `PIA-US-CA-LosAngeles#7` → 🇺🇸 United States - California, Los Angeles (7) • PIA
+-   `Proton-CH-Tor#2` → 🇨🇭 Switzerland (2) 🧅 • ProtonVPN
+-   `Nord-GB-London-Stream#12` → 🇬🇧 United Kingdom - London (12) 📺 • NordVPN
+
+### How It Works
+
+1.  **Provider Detection**: Identifies your VPN provider from DNS, endpoint, or config contents
+2.  **Location Parsing**: Attempts to extract location from the original filename
+3.  **IP Geolocation Fallback**: If filename parsing fails, looks up the endpoint IP to determine country, state/region, and city
+4.  **Feature Detection**: Identifies server capabilities (P2P, Tor, Secure Core, Streaming) from filename and config
+5.  **Auto-Numbering**: Assigns the next available number for servers in the same location
+6.  **Standardized Naming**: Saves the file with the new name and displays it with full location names and emoji indicators
+
+You never need to manually rename files — LazyVPN handles it all automatically!
 
 ## Usage
 
