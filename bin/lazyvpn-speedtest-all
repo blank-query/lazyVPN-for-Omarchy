@@ -185,9 +185,12 @@ for conf in "$WG_DIR"/*.conf; do
     echo "  ✗ VPN interface not created"
     echo "$filename|$provider|0|failed|" >> "$RESULTS_FILE"
     lazyvpn-disconnect >/dev/null 2>&1
-    sleep 1
+    sleep 5  # Wait for backend to clear session
     continue
   fi
+
+  # Wait for connection to fully establish (especially important for Tor and Secure Core)
+  sleep 3
 
   # Verify internet connectivity with retry logic
   echo "  Verifying internet connectivity..."
@@ -207,7 +210,7 @@ for conf in "$WG_DIR"/*.conf; do
     echo "  ✗ Connection has no internet access"
     echo "$filename|$provider|0|no-internet|" >> "$RESULTS_FILE"
     lazyvpn-disconnect >/dev/null 2>&1
-    sleep 1
+    sleep 5  # Wait for backend to clear session
     continue
   fi
 
@@ -221,7 +224,7 @@ for conf in "$WG_DIR"/*.conf; do
       echo "  ✗ Public IP unchanged - traffic not routing through VPN"
       echo "$filename|$provider|0|routing-failed|$TEST_IP" >> "$RESULTS_FILE"
       lazyvpn-disconnect >/dev/null 2>&1
-      sleep 1
+      sleep 5  # Wait for backend to clear session
       continue
     fi
   else
@@ -256,7 +259,10 @@ for conf in "$WG_DIR"/*.conf; do
   # Disconnect
   echo "  Disconnecting..."
   lazyvpn-disconnect >/dev/null 2>&1
-  sleep 2
+
+  # Wait for ProtonVPN backend to clear the session before next connection
+  # This prevents hitting concurrent connection limits when switching servers rapidly
+  sleep 5
 done
 
 echo ""
