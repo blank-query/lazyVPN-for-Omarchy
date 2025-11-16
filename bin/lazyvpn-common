@@ -255,6 +255,12 @@ load_config() {
 # Convert country code to flag emoji
 country_flag() {
     local code="$1"
+
+    # Map common non-ISO codes to proper ISO 3166-1 alpha-2 codes
+    case "$code" in
+        UK) code="GB" ;;  # United Kingdom -> Great Britain
+    esac
+
     # Convert country code to flag emoji using regional indicator symbols
     # Simple lookup table for A-Z to avoid printf issues
     declare -A flags=(
@@ -308,7 +314,7 @@ expand_country_name() {
     local code="$1"
 
     declare -A countries=(
-        [US]="United States" [GB]="United Kingdom" [CA]="Canada" [AU]="Australia" [NZ]="New Zealand"
+        [US]="United States" [GB]="United Kingdom" [UK]="United Kingdom" [CA]="Canada" [AU]="Australia" [NZ]="New Zealand"
         [DE]="Germany" [FR]="France" [IT]="Italy" [ES]="Spain" [PT]="Portugal" [NL]="Netherlands"
         [BE]="Belgium" [CH]="Switzerland" [AT]="Austria" [SE]="Sweden" [NO]="Norway" [DK]="Denmark"
         [FI]="Finland" [IS]="Iceland" [IE]="Ireland" [PL]="Poland" [CZ]="Czech Republic"
