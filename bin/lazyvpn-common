@@ -352,6 +352,20 @@ expand_location_name() {
         [DC]="Washington DC"
     )
 
+    # Canadian province codes
+    declare -A canadian_provinces=(
+        [AB]="Alberta" [BC]="British Columbia" [MB]="Manitoba" [NB]="New Brunswick"
+        [NL]="Newfoundland" [NS]="Nova Scotia" [ON]="Ontario" [PE]="Prince Edward Island"
+        [QC]="Quebec" [SK]="Saskatchewan" [NT]="Northwest Territories" [NU]="Nunavut"
+        [YT]="Yukon"
+    )
+
+    # Swedish county/region codes (for ProtonVPN SE servers)
+    declare -A swedish_regions=(
+        [RO]="Roslagen" [SK]="Skåne" [ST]="Stockholm" [VS]="Västmanland"
+        [VG]="Västra Götaland" [NO]="Norrland" [GO]="Göteborg" [MA]="Malmö"
+    )
+
     # Common city codes (ProtonVPN and others)
     declare -A city_codes=(
         [NYC]="New York City" [LA]="Los Angeles" [SF]="San Francisco" [CHI]="Chicago"
@@ -365,11 +379,24 @@ expand_location_name() {
         [LIS]="Lisbon" [ATH]="Athens" [BUC]="Bucharest" [SOF]="Sofia" [IST]="Istanbul"
         [TYO]="Tokyo" [SEO]="Seoul" [SIN]="Singapore" [HKG]="Hong Kong" [SYD]="Sydney"
         [MEL]="Melbourne" [TOR]="Toronto" [MON]="Montreal" [VAN]="Vancouver"
+        [Tor]="Tor" [Malmoe]="Malmö" [Goeteborg]="Göteborg"
     )
 
     # Check if it's a US state code
     if [[ -n "${us_states[$code]}" ]]; then
         echo "${us_states[$code]}"
+        return
+    fi
+
+    # Check if it's a Canadian province code
+    if [[ -n "${canadian_provinces[$code]}" ]]; then
+        echo "${canadian_provinces[$code]}"
+        return
+    fi
+
+    # Check if it's a Swedish region code
+    if [[ -n "${swedish_regions[$code]}" ]]; then
+        echo "${swedish_regions[$code]}"
         return
     fi
 
@@ -433,6 +460,12 @@ get_pretty_server_name() {
             # Regular state+city: "🇺🇸 United States - California, Los Angeles"
             pretty_name="$flag $expanded_country - $expanded_state, $expanded_city"
         fi
+    elif [[ -n "$state" ]]; then
+        # Just state, no city: "🇺🇸 United States - New York" or "🇸🇪 Sweden - Stockholm"
+        local expanded_country expanded_state
+        expanded_country=$(expand_country_name "$country")
+        expanded_state=$(expand_location_name "$state")
+        pretty_name="$flag $expanded_country - $expanded_state"
     elif [[ -n "$city" ]]; then
         # Just city/location: "🇺🇸 United States - New York"
         local expanded_country expanded_city
@@ -460,31 +493,44 @@ get_pretty_server_name() {
     fi
 
     # Add feature emojis based on services
+    # Use comma-separated matching to avoid substring false positives
     local feature_emojis=""
     if [[ -n "$services" ]]; then
         # P2P support
-        if [[ "$services" == *"p2p"* ]]; then
+        if [[ ",$services," == *",p2p,"* ]]; then
             feature_emojis="${feature_emojis}🔄"
         fi
         # Tor support
-        if [[ "$services" == *"tor"* ]]; then
+        if [[ ",$services," == *",tor,"* ]]; then
             feature_emojis="${feature_emojis}🧅"
         fi
         # Secure Core
-        if [[ "$services" == *"securecore"* ]]; then
-            feature_emojis="${feature_emojis}🛡️"
+        if [[ ",$services," == *",securecore,"* ]]; then
+            feature_emojis="${feature_emojis}🔒"
         fi
         # Streaming
-        if [[ "$services" == *"streaming"* ]]; then
+        if [[ ",$services," == *",streaming,"* ]]; then
             feature_emojis="${feature_emojis}📺"
         fi
-        # Plus/Premium tier
-        if [[ "$services" == *"plus"* ]]; then
-            feature_emojis="${feature_emojis}⭐"
-        fi
         # Free tier
-        if [[ "$services" == *"free"* ]]; then
-            feature_emojis="${feature_emojis}🆓"
+        if [[ ",$services," == *",free,"* ]]; then
+            feature_emojis="${feature_emojis}🤡"
+        fi
+        # VPN Accelerator
+        if [[ ",$services," == *",accelerator,"* ]]; then
+            feature_emojis="${feature_emojis}🚀"
+        fi
+        # NetShield Level 1 (malware blocking only)
+        if [[ ",$services," == *",netshield1,"* ]]; then
+            feature_emojis="${feature_emojis}🗡️"
+        fi
+        # NetShield Level 2 (malware + ad blocking)
+        if [[ ",$services," == *",netshield2,"* ]]; then
+            feature_emojis="${feature_emojis}⚔️"
+        fi
+        # Moderate NAT (gaming optimized)
+        if [[ ",$services," == *",moderatenat,"* ]]; then
+            feature_emojis="${feature_emojis}🎮"
         fi
     fi
 
@@ -572,8 +618,17 @@ generate_standard_server_name() {
         number="${BASH_REMATCH[2]}"
     fi
 
-    # If filename parsing failed, use IP geolocation
-    if [[ -z "$country" ]] && [[ -n "$server_ip" ]]; then
+    # Filter out tier keywords from location fields (they're features, not locations)
+    if [[ "$city" =~ ^(FREE|PLUS|PREMIUM|PRO)$ ]]; then
+        city=""
+    fi
+    if [[ "$state" =~ ^(FREE|PLUS|PREMIUM|PRO)$ ]]; then
+        state=""
+    fi
+
+    # Use IP geolocation to fill in missing location info (city/state)
+    # Always lookup if we have an IP and are missing state or city
+    if [[ -n "$server_ip" ]] && { [[ -z "$state" ]] || [[ -z "$city" ]]; }; then
         # Use temporary geolocation lookup (no cache for this one-time operation)
         local response
         response=$(curl -s --connect-timeout 5 --max-time 10 \
@@ -582,17 +637,24 @@ generate_standard_server_name() {
         if [[ $? -eq 0 ]] && [[ -n "$response" ]]; then
             local status=$(echo "$response" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
             if [[ "$status" == "success" ]]; then
-                country=$(echo "$response" | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
+                local geo_country=$(echo "$response" | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
                 local geo_city=$(echo "$response" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
                 local geo_region=$(echo "$response" | grep -o '"region":"[^"]*"' | cut -d'"' -f4)
 
-                # For US, use region as state
-                if [[ "$country" == "US" ]] && [[ -n "$geo_region" ]]; then
-                    state="$geo_region"
+                # Use geolocation country if we don't have one from filename
+                if [[ -z "$country" ]] && [[ -n "$geo_country" ]]; then
+                    country="$geo_country"
                 fi
 
-                # Use city (clean it for filename)
-                if [[ -n "$geo_city" ]]; then
+                # Fill in state if missing (for US/CA, use region code)
+                if [[ -z "$state" ]] && [[ -n "$geo_region" ]]; then
+                    if [[ "$country" == "US" ]] || [[ "$country" == "CA" ]] || [[ "$country" == "SE" ]]; then
+                        state="$geo_region"
+                    fi
+                fi
+
+                # Fill in city if missing (clean it for filename)
+                if [[ -z "$city" ]] && [[ -n "$geo_city" ]]; then
                     city=$(echo "$geo_city" | tr -d ' ')
                 fi
             fi

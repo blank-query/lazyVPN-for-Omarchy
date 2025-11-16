@@ -147,33 +147,69 @@ fi
 # Check filename and config file for feature indicators
 services=""
 
-# Check for P2P support (word boundary matching to avoid false positives)
-if [[ "$SERVER_NAME" =~ [Pp]2[Pp] ]] || grep -qiw "p2p" "$CONFIG_FILE" 2>/dev/null; then
+# Get the Peer comment line which often has server designation
+peer_comment=$(grep -m1 "^# .*#[0-9]" "$CONFIG_FILE" 2>/dev/null | tr -d '#' | tr -d ' ')
+
+# Check for P2P support
+if [[ "$SERVER_NAME" =~ [Pp]2[Pp] ]] || [[ "$peer_comment" =~ [Pp]2[Pp] ]] || grep -qiw "p2p" "$CONFIG_FILE" 2>/dev/null; then
   services="${services:+$services,}p2p"
 fi
 
-# Check for Tor support (use word boundary to avoid matching "Accelerator", "Monitor", etc.)
-if [[ "$SERVER_NAME" =~ -[Tt]or- ]] || [[ "$SERVER_NAME" =~ -[Tt]or$ ]] || [[ "$SERVER_NAME" =~ ^[Tt]or- ]] || grep -qiE '\btor\b' "$CONFIG_FILE" 2>/dev/null; then
+# Check for Tor support
+if [[ "$SERVER_NAME" =~ -[Tt][Oo][Rr]- ]] || [[ "$SERVER_NAME" =~ -[Tt][Oo][Rr]$ ]] || [[ "$SERVER_NAME" =~ ^[Tt][Oo][Rr]- ]] || \
+   [[ "$peer_comment" =~ -[Tt][Oo][Rr]$ ]] || [[ "$peer_comment" =~ [Tt][Oo][Rr]- ]]; then
   services="${services:+$services,}tor"
 fi
 
-# Check for Secure Core (ProtonVPN feature)
+# Check for Secure Core (ProtonVPN multi-hop feature)
+# Secure Core uses format: [ENTRY_COUNTRY]-[EXIT_COUNTRY]#[NUMBER]
+# Entry countries are always CH (Switzerland), IS (Iceland), or SE (Sweden)
+# peer_comment has # and spaces removed, so "SE-RO#1" becomes "SE-RO1"
+if [[ "$peer_comment" =~ ^(CH|IS|SE)-([A-Z]{2})[0-9] ]]; then
+  # Double-check the second part is a valid country code, not TOR/FREE/etc
+  exit_country="${BASH_REMATCH[2]}"
+  if [[ ! "$exit_country" =~ ^(TO|FR|SC)$ ]]; then
+    services="${services:+$services,}securecore"
+  fi
+fi
+# Also check filename/config for explicit Secure Core markers
 if [[ "$SERVER_NAME" =~ [Ss]ecure[_-]?[Cc]ore ]] || grep -qiE 'secure.core|securecore' "$CONFIG_FILE" 2>/dev/null; then
   services="${services:+$services,}securecore"
 fi
 
 # Check for Streaming support
-if [[ "$SERVER_NAME" =~ [Ss]treaming ]] || grep -qiw "streaming" "$CONFIG_FILE" 2>/dev/null; then
+if [[ "$SERVER_NAME" =~ [Ss]treaming ]] || [[ "$SERVER_NAME" =~ [Ss]tream ]] || \
+   [[ "$peer_comment" =~ [Ss]treaming ]] || grep -qiw "streaming" "$CONFIG_FILE" 2>/dev/null; then
   services="${services:+$services,}streaming"
 fi
 
-# Check for Plus/Premium tier servers
-if [[ "$SERVER_NAME" =~ [Pp]lus ]] || [[ "$SERVER_NAME" =~ [Pp]remium ]]; then
-  services="${services:+$services,}plus"
+# Check for P2P support (via NAT-PMP Port Forwarding)
+# P2P and Port Forwarding are the same feature
+if grep -q "^# NAT-PMP.*= on" "$CONFIG_FILE" 2>/dev/null; then
+  services="${services:+$services,}p2p"
+fi
+
+# Check for VPN Accelerator
+if grep -q "^# VPN Accelerator.*= on" "$CONFIG_FILE" 2>/dev/null; then
+  services="${services:+$services,}accelerator"
+fi
+
+# Check for NetShield (ad/tracker/malware blocking)
+# Level 0 = off, Level 1 = malware only, Level 2 = malware + ads
+netshield_level=$(grep "^# NetShield" "$CONFIG_FILE" 2>/dev/null | grep -oE "[0-9]+" | head -1)
+if [[ -n "$netshield_level" ]] && [[ "$netshield_level" -eq 1 ]]; then
+  services="${services:+$services,}netshield1"
+elif [[ -n "$netshield_level" ]] && [[ "$netshield_level" -eq 2 ]]; then
+  services="${services:+$services,}netshield2"
+fi
+
+# Check for Moderate NAT (gaming/P2P optimized)
+if grep -q "^# Moderate NAT.*= on" "$CONFIG_FILE" 2>/dev/null; then
+  services="${services:+$services,}moderatenat"
 fi
 
 # Check for Free tier servers
-if [[ "$SERVER_NAME" =~ [Ff]ree ]]; then
+if [[ "$SERVER_NAME" =~ [Ff]ree ]] || [[ "$peer_comment" =~ [Ff][Rr][Ee][Ee] ]]; then
   services="${services:+$services,}free"
 fi
 
