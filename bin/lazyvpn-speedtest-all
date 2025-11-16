@@ -266,35 +266,63 @@ for conf in "$WG_DIR"/*.conf; do
 done
 
 echo ""
-echo "══════════════════════════════════════════════════════════════════════════════════"
-echo "                              SPEED TEST RESULTS"
-echo "══════════════════════════════════════════════════════════════════════════════════"
+echo "════════════════════════════════════════════════════════════════════════════════════════════"
+echo "SPEED TEST RESULTS"
+echo "════════════════════════════════════════════════════════════════════════════════════════════"
 echo ""
 
-# Sort results by speed (descending) and display
-sort -t'|' -k3 -rn "$RESULTS_FILE" | while IFS='|' read -r server provider speed status ip; do
-  # Handle non-VPN connection specially
+# First pass: calculate maximum display name length
+MAX_NAME_LEN=0
+while IFS='|' read -r server provider speed status ip; do
   if [[ "$server" == "DIRECT" ]]; then
     DISPLAY_NAME="Direct Connection (No VPN)"
   else
-    # Get pretty server name
     DISPLAY_NAME=$(get_pretty_server_name "$server" "$SCRIPT_DIR")
   fi
 
-  # Format with IP address
+  NAME_LEN=${#DISPLAY_NAME}
+  # Add compensation for emojis (flags add ~2-4 chars of visual width)
+  emoji_count=$(echo "$DISPLAY_NAME" | grep -o "🇦\|🇧\|🇨\|🇩\|🇪\|🇫\|🇬\|🇭\|🇮\|🇯\|🇰\|🇱\|🇲\|🇳\|🇴\|🇵\|🇶\|🇷\|🇸\|🇹\|🇺\|🇻\|🇼\|🇽\|🇾\|🇿" | wc -l)
+  ((NAME_LEN+=emoji_count))
+
+  if [[ $NAME_LEN -gt $MAX_NAME_LEN ]]; then
+    MAX_NAME_LEN=$NAME_LEN
+  fi
+done < "$RESULTS_FILE"
+
+# Add padding for readability
+((MAX_NAME_LEN+=3))
+
+# Print table header
+printf "%-${MAX_NAME_LEN}s  %-18s  %s\n" "SERVER" "PUBLIC IP" "SPEED"
+printf "%${MAX_NAME_LEN}s  %18s  %s\n" | tr ' ' '─'
+
+# Second pass: display sorted results
+sort -t'|' -k3 -rn "$RESULTS_FILE" | while IFS='|' read -r server provider speed status ip; do
+  if [[ "$server" == "DIRECT" ]]; then
+    DISPLAY_NAME="Direct Connection (No VPN)"
+  else
+    DISPLAY_NAME=$(get_pretty_server_name "$server" "$SCRIPT_DIR")
+  fi
+
+  # Format output
   if [[ "$status" == "ok" ]]; then
     if [[ -n "$ip" ]]; then
-      printf "%-50s %-20s %10s Mbps\n" "$DISPLAY_NAME" "($ip)" "$speed"
+      printf "%-${MAX_NAME_LEN}s  %-18s  %7.2f Mbps\n" "$DISPLAY_NAME" "$ip" "$speed"
     else
-      printf "%-50s %-20s %10s Mbps\n" "$DISPLAY_NAME" "" "$speed"
+      printf "%-${MAX_NAME_LEN}s  %-18s  %7.2f Mbps\n" "$DISPLAY_NAME" "N/A" "$speed"
     fi
   else
-    printf "%-50s %-20s %10s\n" "$DISPLAY_NAME" "($ip)" "FAILED"
+    if [[ -n "$ip" ]]; then
+      printf "%-${MAX_NAME_LEN}s  %-18s  %s\n" "$DISPLAY_NAME" "$ip" "FAILED"
+    else
+      printf "%-${MAX_NAME_LEN}s  %-18s  %s\n" "$DISPLAY_NAME" "N/A" "FAILED"
+    fi
   fi
 done
 
 echo ""
-echo "══════════════════════════════════════════════════════════════════════════════════"
+echo "════════════════════════════════════════════════════════════════════════════════════════════"
 
 # Show final public IP after all tests complete
 echo ""
