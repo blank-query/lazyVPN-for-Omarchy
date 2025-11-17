@@ -160,9 +160,8 @@ echo "LATENCY TEST RESULTS"
 echo "════════════════════════════════════════════════════════════════════════════════════════════"
 echo ""
 
-# Collect results and calculate max name length
+# Collect results
 SORTED_RESULTS=$(mktemp)
-MAX_NAME_LEN=0
 
 for result_file in "$RESULTS_DIR"/*; do
   [[ -f "$result_file" ]] || continue
@@ -174,30 +173,24 @@ for result_file in "$RESULTS_DIR"/*; do
     pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
     # Format: latency|server_name for sorting
     echo "${latency}|${pretty_name}" >> "$SORTED_RESULTS"
-
-    # Calculate display width with emoji compensation
-    NAME_LEN=${#pretty_name}
-    emoji_count=$(echo "$pretty_name" | grep -o "🇦\|🇧\|🇨\|🇩\|🇪\|🇫\|🇬\|🇭\|🇮\|🇯\|🇰\|🇱\|🇲\|🇳\|🇴\|🇵\|🇶\|🇷\|🇸\|🇹\|🇺\|🇻\|🇼\|🇽\|🇾\|🇿" | wc -l)
-    ((NAME_LEN+=emoji_count))
-
-    if [[ $NAME_LEN -gt $MAX_NAME_LEN ]]; then
-      MAX_NAME_LEN=$NAME_LEN
-    fi
   fi
 done
 
-# Add padding
-((MAX_NAME_LEN+=3))
+# Create a temp file for column output
+COLUMN_OUTPUT=$(mktemp)
 
-# Print table header
-printf "%-${MAX_NAME_LEN}s  %s\n" "SERVER" "LATENCY"
-printf "%${MAX_NAME_LEN}s  %s\n" | tr ' ' '─'
+# Build the table data
+echo "SERVER|LATENCY" > "$COLUMN_OUTPUT"
 
 # Sort by latency (numeric) and display
 if [[ -s "$SORTED_RESULTS" ]]; then
   sort -t'|' -k1 -n "$SORTED_RESULTS" | while IFS='|' read -r latency server_name; do
-    printf "%-${MAX_NAME_LEN}s  %6d ms\n" "$server_name" "$latency"
+    echo "${server_name}|${latency} ms" >> "$COLUMN_OUTPUT"
   done
+
+  # Use column command to align output with explicit spacing
+  column -t -s'|' -o '    ' "$COLUMN_OUTPUT"
+  rm -f "$COLUMN_OUTPUT"
 else
   echo "No servers responded to ping."
 fi

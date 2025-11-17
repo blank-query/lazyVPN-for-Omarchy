@@ -32,9 +32,8 @@ if [[ -z "$SERVER_NAME" ]]; then
     exit 0
   fi
 
-  # First pass: collect all data and calculate max name length
+  # Collect all data
   TEMP_RESULTS=$(mktemp)
-  MAX_NAME_LEN=0
 
   for perf_file in "$PERF_DIR"/*.log; do
     [[ ! -f "$perf_file" ]] && continue
@@ -46,15 +45,6 @@ if [[ -z "$SERVER_NAME" ]]; then
       pretty_name="🌐 Direct (Non-VPN)"
     else
       pretty_name=$(get_pretty_server_name "$server" "$SCRIPT_DIR")
-    fi
-
-    # Calculate display width with emoji compensation
-    NAME_LEN=${#pretty_name}
-    emoji_count=$(echo "$pretty_name" | grep -o "🇦\|🇧\|🇨\|🇩\|🇪\|🇫\|🇬\|🇭\|🇮\|🇯\|🇰\|🇱\|🇲\|🇳\|🇴\|🇵\|🇶\|🇷\|🇸\|🇹\|🇺\|🇻\|🇼\|🇽\|🇾\|🇿\|🌐" | wc -l)
-    ((NAME_LEN+=emoji_count))
-
-    if [[ $NAME_LEN -gt $MAX_NAME_LEN ]]; then
-      MAX_NAME_LEN=$NAME_LEN
     fi
 
     # Calculate averages
@@ -92,32 +82,37 @@ if [[ -z "$SERVER_NAME" ]]; then
     echo "$pretty_name|$avg_speed|$avg_latency|$total_tests" >> "$TEMP_RESULTS"
   done
 
-  # Add padding
-  ((MAX_NAME_LEN+=3))
-
   # Print header
   echo "════════════════════════════════════════════════════════════════════════════════════════════"
-  printf "%-${MAX_NAME_LEN}s  %12s  %12s  %s\n" "SERVER" "AVG SPEED" "AVG LATENCY" "TESTS"
-  printf "%${MAX_NAME_LEN}s  %12s  %12s  %s\n" | tr ' ' '─'
 
-  # Second pass: display sorted results
+  # Create a temp file for column output
+  COLUMN_OUTPUT=$(mktemp)
+
+  # Build the table data
+  echo "SERVER|AVG SPEED|AVG LATENCY|TESTS" > "$COLUMN_OUTPUT"
+
+  # Display sorted results
   sort -t'|' -k2 -rn "$TEMP_RESULTS" 2>/dev/null | while IFS='|' read -r pretty_name avg_speed avg_latency total_tests; do
     # Format speed column
     if [[ "$avg_speed" != "N/A" ]]; then
-      speed_col=$(printf "%8.2f Mbps" "$avg_speed")
+      speed_col=$(printf "%.2f Mbps" "$avg_speed")
     else
       speed_col="N/A"
     fi
 
     # Format latency column
     if [[ "$avg_latency" != "N/A" ]]; then
-      latency_col=$(printf "%7d ms" "$avg_latency")
+      latency_col=$(printf "%d ms" "$avg_latency")
     else
       latency_col="N/A"
     fi
 
-    printf "%-${MAX_NAME_LEN}s  %12s  %12s  %5d\n" "$pretty_name" "$speed_col" "$latency_col" "$total_tests"
+    echo "${pretty_name}|${speed_col}|${latency_col}|${total_tests}" >> "$COLUMN_OUTPUT"
   done
+
+  # Use column command to align output with explicit spacing
+  column -t -s'|' -o '    ' "$COLUMN_OUTPUT"
+  rm -f "$COLUMN_OUTPUT"
 
   rm -f "$TEMP_RESULTS"
 
