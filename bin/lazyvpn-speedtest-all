@@ -271,33 +271,13 @@ echo "SPEED TEST RESULTS"
 echo "════════════════════════════════════════════════════════════════════════════════════════════"
 echo ""
 
-# First pass: calculate maximum display name length
-MAX_NAME_LEN=0
-while IFS='|' read -r server provider speed status ip; do
-  if [[ "$server" == "DIRECT" ]]; then
-    DISPLAY_NAME="Direct Connection (No VPN)"
-  else
-    DISPLAY_NAME=$(get_pretty_server_name "$server" "$SCRIPT_DIR")
-  fi
+# Create a temp file for column output
+COLUMN_OUTPUT=$(mktemp)
 
-  NAME_LEN=${#DISPLAY_NAME}
-  # Add compensation for emojis (flags add ~2-4 chars of visual width)
-  emoji_count=$(echo "$DISPLAY_NAME" | grep -o "🇦\|🇧\|🇨\|🇩\|🇪\|🇫\|🇬\|🇭\|🇮\|🇯\|🇰\|🇱\|🇲\|🇳\|🇴\|🇵\|🇶\|🇷\|🇸\|🇹\|🇺\|🇻\|🇼\|🇽\|🇾\|🇿" | wc -l)
-  ((NAME_LEN+=emoji_count))
+# Build the table data
+echo "SERVER|SPEED" > "$COLUMN_OUTPUT"
 
-  if [[ $NAME_LEN -gt $MAX_NAME_LEN ]]; then
-    MAX_NAME_LEN=$NAME_LEN
-  fi
-done < "$RESULTS_FILE"
-
-# Add padding for readability
-((MAX_NAME_LEN+=3))
-
-# Print table header
-printf "%-${MAX_NAME_LEN}s  %-18s  %s\n" "SERVER" "PUBLIC IP" "SPEED"
-printf "%${MAX_NAME_LEN}s  %18s  %s\n" | tr ' ' '─'
-
-# Second pass: display sorted results
+# Display sorted results
 sort -t'|' -k3 -rn "$RESULTS_FILE" | while IFS='|' read -r server provider speed status ip; do
   if [[ "$server" == "DIRECT" ]]; then
     DISPLAY_NAME="Direct Connection (No VPN)"
@@ -307,19 +287,15 @@ sort -t'|' -k3 -rn "$RESULTS_FILE" | while IFS='|' read -r server provider speed
 
   # Format output
   if [[ "$status" == "ok" ]]; then
-    if [[ -n "$ip" ]]; then
-      printf "%-${MAX_NAME_LEN}s  %-18s  %7.2f Mbps\n" "$DISPLAY_NAME" "$ip" "$speed"
-    else
-      printf "%-${MAX_NAME_LEN}s  %-18s  %7.2f Mbps\n" "$DISPLAY_NAME" "N/A" "$speed"
-    fi
+    echo "${DISPLAY_NAME}|$(printf "%.2f Mbps" "$speed")" >> "$COLUMN_OUTPUT"
   else
-    if [[ -n "$ip" ]]; then
-      printf "%-${MAX_NAME_LEN}s  %-18s  %s\n" "$DISPLAY_NAME" "$ip" "FAILED"
-    else
-      printf "%-${MAX_NAME_LEN}s  %-18s  %s\n" "$DISPLAY_NAME" "N/A" "FAILED"
-    fi
+    echo "${DISPLAY_NAME}|FAILED" >> "$COLUMN_OUTPUT"
   fi
 done
+
+# Use column command to align output with explicit spacing
+column -t -s'|' -o '    ' "$COLUMN_OUTPUT"
+rm -f "$COLUMN_OUTPUT"
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════════════════════════════"
