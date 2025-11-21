@@ -5,6 +5,7 @@
 ## Table of Contents
 
 - [Core Philosophy](#core-philosophy)
+- [Screenshots](#screenshots)
 - [Feature Matrix](#feature-matrix)
   - [Connection Management](#-connection-management)
   - [Security & Privacy](#-security--privacy)
@@ -30,6 +31,57 @@
 -   **Intelligence**: The system is smart. It detects providers, parses server names, and automatically handles complex tasks.
 -   **Resilience**: With features like the auto-recover daemon and atomic configuration saves, LazyVPN is built to be reliable.
 -   **Transparency**: Understand your connection with detailed status info, performance tests, and leak protection.
+
+---
+
+## Screenshots
+
+### Main Menu
+![LazyVPN Main Menu](images/01-main-menu.png)
+*The main menu when disconnected, showing all available options*
+
+### Server Selection with Feature Indicators
+![Server Selection](images/03-server-selection.png)
+*Interactive server picker with country flags, feature emojis, and real-time filtering*
+
+### Connection Modes
+![Connection Modes](images/02-connection-modes.png)
+*Choose how to connect: lowest latency, random, specific server, or last used*
+
+### Connecting to a Server
+![Connection Process](images/04-connecting.png)
+*Real-time connection status with IP verification and DNS leak protection*
+
+### Latency Testing
+![Latency Test Results](images/10-latency-test-results.png)
+*Parallel latency testing across all servers with sorted results*
+
+### Advanced Configuration
+
+<details>
+<summary>Click to see more screenshots</summary>
+
+#### Killswitch Settings
+![Killswitch Settings](images/06-killswitch-settings.png)
+*Firewall killswitch with local network access and disconnect behavior options*
+
+#### Autoconnect Settings
+![Autoconnect Settings](images/07-autoconnect-settings.png)
+*Configure automatic connection on boot with multiple mode options*
+
+#### Options Menu
+![Options Menu](images/08-options-menu.png)
+*Server management, auto-recover daemon, IPv6 protection, and more*
+
+#### Adding Servers
+![Add Servers](images/09-add-servers.png)
+*Smart server import with automatic validation, provider detection, and duplicate prevention*
+
+#### Testing Menu
+![Tests Menu](images/05-tests-menu.png)
+*Comprehensive testing suite including latency, speed, DNS leak tests, and performance history*
+
+</details>
 
 ---
 
