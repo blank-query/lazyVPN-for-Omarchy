@@ -256,18 +256,65 @@ else
 fi
 echo ""
 
-# --- Step 6: Remove Configuration Directory ---
-echo "Step 6: Removing configuration files..."
+# --- Step 6: Securely Remove Performance History ---
+echo "Step 6: Securely removing performance history..."
+PERF_DIR="$CONFIG_DIR/performance"
+if [[ -d "$PERF_DIR" ]] && ls "$PERF_DIR"/*.log 1>/dev/null 2>&1; then
+  echo "  - Performance history contains usage metadata. Securely deleting..."
+  shredded_count=0
+  for log_file in "$PERF_DIR"/*.log; do
+    if shred -u "$log_file" 2>/dev/null; then
+      ((shredded_count++))
+    else
+      rm -f "$log_file"  # Fallback to regular deletion
+    fi
+  done
+  echo "    ✓ Securely deleted $shredded_count performance log(s)"
+  rmdir "$PERF_DIR" 2>/dev/null  # Remove empty directory
+else
+  echo "  - No performance history found."
+fi
+echo ""
+
+# --- Step 7: Securely Remove LazyVPN Config Files ---
+echo "Step 7: Securely removing LazyVPN configuration files..."
 if [[ ! -d "$CONFIG_DIR" ]]; then
   echo "  - Configuration directory not found."
 else
+  # Securely delete LazyVPN's own config files (not server configs)
+  echo "  - Securely deleting LazyVPN config and cache files..."
+  shredded_count=0
+  for config_file in "$CONFIG_DIR"/config "$CONFIG_DIR"/.server-list-cache; do
+    if [[ -f "$config_file" ]]; then
+      if shred -u "$config_file" 2>/dev/null; then
+        echo "    ✓ Securely deleted: $(basename "$config_file")"
+        ((shredded_count++))
+      else
+        rm -f "$config_file"  # Fallback to regular deletion
+      fi
+    fi
+  done
+
+  # Handle WireGuard server configs based on user choice
   if [[ "$delete_configs" =~ ^[Yy]$ ]]; then
+    # User wants to delete server configs - shred them
+    if [[ -d "$WG_CONFIG_DIR" ]] && ls "$WG_CONFIG_DIR"/*.conf 1>/dev/null 2>&1; then
+      echo "  - Securely deleting WireGuard server configs..."
+      for conf_file in "$WG_CONFIG_DIR"/*.conf; do
+        if shred -u "$conf_file" 2>/dev/null; then
+          echo "    ✓ Securely deleted: $(basename "$conf_file")"
+        else
+          echo "    ✗ Failed to securely delete: $(basename "$conf_file")"
+          rm -f "$conf_file"  # Fallback to regular deletion
+        fi
+      done
+    fi
+    # Remove the entire config directory
     rm -rf "$CONFIG_DIR"
     echo "  - Removed entire configuration directory: $CONFIG_DIR"
   else
-    # Remove everything EXCEPT the wireguard folder
-    find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 ! -name 'wireguard' -exec rm -rf {} +
-    echo "  - Removed configuration files, but preserved wireguard configs."
+    # User wants to keep server configs - preserve wireguard folder
+    echo "  - Preserved WireGuard server configs in: $WG_CONFIG_DIR"
   fi
 fi
 echo ""
@@ -278,9 +325,23 @@ NETDEV_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.netdev"
 NETWORK_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.network"
 
 if [[ -f "$NETDEV_FILE" ]] || [[ -f "$NETWORK_FILE" ]]; then
-  echo "  - Found leftover systemd-networkd files. Removing..."
-  sudo rm -f "$NETDEV_FILE" 2>/dev/null && echo "    - Removed: $NETDEV_FILE"
-  sudo rm -f "$NETWORK_FILE" 2>/dev/null && echo "    - Removed: $NETWORK_FILE"
+  echo "  - Found leftover systemd-networkd files. Securely deleting..."
+  if [[ -f "$NETDEV_FILE" ]]; then
+    if sudo shred -u "$NETDEV_FILE" 2>/dev/null; then
+      echo "    ✓ Securely deleted: $NETDEV_FILE"
+    else
+      sudo rm -f "$NETDEV_FILE" 2>/dev/null  # Fallback
+      echo "    - Removed: $NETDEV_FILE"
+    fi
+  fi
+  if [[ -f "$NETWORK_FILE" ]]; then
+    if sudo shred -u "$NETWORK_FILE" 2>/dev/null; then
+      echo "    ✓ Securely deleted: $NETWORK_FILE"
+    else
+      sudo rm -f "$NETWORK_FILE" 2>/dev/null  # Fallback
+      echo "    - Removed: $NETWORK_FILE"
+    fi
+  fi
 
   # Check if interface still exists
   if ip link show "$CONNECTION_NAME" &>/dev/null; then
@@ -313,6 +374,184 @@ if sudo test -f /etc/sudoers.d/lazyvpn; then
   fi
 else
   echo "  - No sudoers configuration found"
+fi
+echo ""
+
+# --- Step 9: Clean up system logs (surgical approach) ---
+echo "Step 9: System log cleanup (optional)..."
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  Privacy Note: System Logs"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+echo "LazyVPN connection history may exist in systemd journal logs."
+echo "These logs contain:"
+echo "  • Timestamps of VPN connections/disconnections"
+echo "  • Interface names (e.g., ${CONNECTION_NAME:-wg0})"
+echo "  • Configuration file paths"
+echo ""
+echo "LazyVPN can surgically identify and securely delete ONLY the"
+echo "journal files containing VPN logs, preserving other system logs."
+echo ""
+echo "⚠️  WARNING: This will:"
+echo "   • Stop systemd-journald temporarily"
+echo "   • Shred journal files containing VPN connection history"
+echo "   • Preserve journal files from periods without VPN activity"
+echo "   • Restart systemd-journald"
+echo ""
+read -r -p "Securely remove journal files containing VPN logs? [y/N]: " clear_logs
+
+if [[ "$clear_logs" =~ ^[Yy]$ ]]; then
+  echo ""
+  echo "  - Scanning journal files for VPN activity..."
+
+  # Get machine ID for journal directory
+  MACHINE_ID=$(cat /etc/machine-id 2>/dev/null)
+  if [[ -z "$MACHINE_ID" ]]; then
+    echo "    ✗ Failed to read machine-id"
+  else
+    JOURNAL_DIR="/var/log/journal/$MACHINE_ID"
+    if [[ ! -d "$JOURNAL_DIR" ]]; then
+      JOURNAL_DIR="/run/log/journal/$MACHINE_ID"
+    fi
+
+    if [[ ! -d "$JOURNAL_DIR" ]]; then
+      echo "    ✗ Journal directory not found"
+    else
+      # Find all system journal files and check for VPN logs
+      VPN_JOURNALS=()
+      INTERFACE_NAME="${CONNECTION_NAME:-wg0}"
+
+      for journal_file in "$JOURNAL_DIR"/system*.journal; do
+        if [[ -f "$journal_file" ]]; then
+          # Check if this journal contains VPN logs
+          if journalctl --file="$journal_file" -u systemd-networkd --no-pager 2>/dev/null | grep -q "$INTERFACE_NAME"; then
+            VPN_JOURNALS+=("$journal_file")
+          fi
+        fi
+      done
+
+      TOTAL_JOURNALS=$(find "$JOURNAL_DIR" -name "system*.journal" -type f | wc -l)
+      VPN_COUNT=${#VPN_JOURNALS[@]}
+
+      echo "    Found VPN logs in $VPN_COUNT of $TOTAL_JOURNALS system journal files"
+
+      if [[ $VPN_COUNT -eq 0 ]]; then
+        echo "    ✓ No VPN logs found in journal files"
+      else
+        echo ""
+        echo "  - Stopping systemd-journald..."
+        if sudo systemctl stop systemd-journald 2>/dev/null; then
+          echo "    ✓ Stopped systemd-journald"
+
+          echo ""
+          echo "  - Securely deleting journal files with VPN logs..."
+          shredded=0
+          failed=0
+
+          for journal_file in "${VPN_JOURNALS[@]}"; do
+            filename=$(basename "$journal_file")
+            if sudo shred -u "$journal_file" 2>/dev/null; then
+              echo "    ✓ Securely deleted: $filename"
+              ((shredded++))
+            else
+              echo "    ✗ Failed to shred: $filename"
+              ((failed++))
+            fi
+          done
+
+          echo ""
+          echo "  - Restarting systemd-journald..."
+          sudo systemctl start systemd-journald 2>/dev/null
+          sleep 1
+
+          if systemctl is-active --quiet systemd-journald; then
+            echo "    ✓ systemd-journald restarted successfully"
+            echo ""
+            echo "    Summary:"
+            echo "      • Securely deleted: $shredded journal file(s)"
+            if [[ $failed -gt 0 ]]; then
+              echo "      • Failed: $failed journal file(s)"
+            fi
+            clean_count=$((TOTAL_JOURNALS - VPN_COUNT))
+            echo "      • Preserved: $clean_count journal file(s) without VPN logs"
+          else
+            echo "    ✗ Failed to restart systemd-journald"
+            echo "    Please manually start it: sudo systemctl start systemd-journald"
+          fi
+        else
+          echo "    ✗ Failed to stop systemd-journald"
+        fi
+      fi
+    fi
+  fi
+else
+  echo ""
+  echo "  - System logs preserved."
+  echo ""
+  echo "To manually clear VPN logs later, you would need to:"
+  echo "  1. Identify journal files containing VPN logs"
+  echo "  2. Stop systemd-journald"
+  echo "  3. Securely delete those files"
+  echo "  4. Restart systemd-journald"
+fi
+echo ""
+
+# --- Step 10: Clean up shell history ---
+echo "Step 10: Cleaning shell history..."
+echo ""
+echo "Removing VPN-related commands from shell history files..."
+
+INTERFACE_NAME="${CONNECTION_NAME:-wg0}"
+cleaned_count=0
+skipped_count=0
+
+# List of common shell history files
+HISTORY_FILES=(
+  "$HOME/.bash_history"
+  "$HOME/.zsh_history"
+  "$HOME/.local/share/fish/fish_history"
+)
+
+for hist_file in "${HISTORY_FILES[@]}"; do
+  if [[ -f "$hist_file" ]]; then
+    shell_name=$(basename "$hist_file" | cut -d_ -f1 | cut -d. -f2)
+
+    # Create temporary file for cleaned history
+    temp_hist=$(mktemp)
+
+    # Remove lines containing VPN-related keywords
+    # Use case-insensitive grep to catch variations
+    if grep -vEi "lazyvpn|wireguard|$INTERFACE_NAME|\.conf.*proton|\.conf.*mullvad|\.conf.*ivpn" "$hist_file" > "$temp_hist" 2>/dev/null; then
+      # Check if any lines were actually removed
+      original_lines=$(wc -l < "$hist_file")
+      cleaned_lines=$(wc -l < "$temp_hist")
+      removed_lines=$((original_lines - cleaned_lines))
+
+      if [[ $removed_lines -gt 0 ]]; then
+        # Replace original with cleaned version
+        mv "$temp_hist" "$hist_file"
+        echo "  ✓ Cleaned $shell_name history: removed $removed_lines line(s)"
+        ((cleaned_count++))
+      else
+        # No VPN commands found
+        rm -f "$temp_hist"
+        echo "  - $shell_name history: no VPN commands found"
+        ((skipped_count++))
+      fi
+    else
+      # Grep failed, preserve original
+      rm -f "$temp_hist"
+      echo "  ✗ Failed to clean $shell_name history"
+    fi
+  fi
+done
+
+if [[ $cleaned_count -eq 0 ]] && [[ $skipped_count -eq 0 ]]; then
+  echo "  - No shell history files found"
+else
+  echo ""
+  echo "  Summary: Cleaned $cleaned_count history file(s), $skipped_count had no VPN commands"
 fi
 echo ""
 
