@@ -135,7 +135,11 @@
         -   Connect to a `random` server.
         -   Connect to a `specific` server of your choice.
 -   **➕ Easy Server Management**:
-    -   **Add Servers**: A guided `fzf` interface to import `.conf` files from `~/Downloads` with automatic validation, provider detection, location detection (via IP geolocation if needed), standardized renaming, and duplicate prevention.
+    -   **Add Servers**: A guided `fzf` interface to import `.conf` files from `~/Downloads` with:
+        -   Automatic validation (before and after import)
+        -   Provider detection and location detection (via IP geolocation if needed)
+        -   Standardized renaming and duplicate prevention
+        -   Optional cleanup prompt to securely delete original files from Downloads after successful import (uses `shred` to overwrite before deletion)
     -   **Remove Servers**: Safely remove servers with automatic cleanup of performance history and configuration references.
     -   Both accessible from `⚙️ Options` submenu.
 -   **✏️ Interface Renaming**: Easily rename the network interface (e.g., from `wg0` to `lazyvpn`) directly from the menu.
@@ -404,7 +408,7 @@ Future features and enhancements under consideration:
 ### 🔐 Encrypted Configuration Storage (Optional Feature)
 -   **Toggle-able Security**: Optional encryption for stored `.conf` files (disabled by default)
 -   **Automatic Encryption**: When enabled, encrypt `.conf` files before storing them in `~/.config/lazyvpn/wireguard/`
--   **Secure Cleanup**: Offer to securely delete plaintext `.conf` files from `~/Downloads` after import
+-   **Secure Deletion**: ✅ *Implemented* - Optional prompt to securely delete original `.conf` files from Downloads after import using `shred`
 -   **Transparent Decryption**: Decrypt configs on-the-fly when connecting, completely transparent to the user
 -   **Password Protection**: Password/passphrase protection for the encrypted config vault
 
