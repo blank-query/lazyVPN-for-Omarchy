@@ -517,7 +517,7 @@ for hist_file in "${HISTORY_FILES[@]}"; do
   if [[ -f "$hist_file" ]]; then
     shell_name=$(basename "$hist_file" | cut -d_ -f1 | cut -d. -f2)
 
-    # Create temporary file for cleaned history
+    # Create temporary file for cleaned history (born clean, VPN lines never written to it)
     temp_hist=$(mktemp)
 
     # Remove lines containing VPN-related keywords
@@ -529,10 +529,18 @@ for hist_file in "${HISTORY_FILES[@]}"; do
       removed_lines=$((original_lines - cleaned_lines))
 
       if [[ $removed_lines -gt 0 ]]; then
-        # Replace original with cleaned version
-        mv "$temp_hist" "$hist_file"
-        echo "  ✓ Cleaned $shell_name history: removed $removed_lines line(s)"
-        ((cleaned_count++))
+        # Securely delete the original file (contains VPN commands)
+        if shred -u "$hist_file" 2>/dev/null; then
+          # Replace with cleaned version
+          mv "$temp_hist" "$hist_file"
+          echo "  ✓ Cleaned $shell_name history: securely removed $removed_lines line(s)"
+          ((cleaned_count++))
+        else
+          # Shred failed, fallback to regular replacement
+          mv "$temp_hist" "$hist_file"
+          echo "  ✓ Cleaned $shell_name history: removed $removed_lines line(s) (shred unavailable)"
+          ((cleaned_count++))
+        fi
       else
         # No VPN commands found
         rm -f "$temp_hist"
