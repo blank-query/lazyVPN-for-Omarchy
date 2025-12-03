@@ -163,7 +163,7 @@
 
 -   **Omarchy Menu**: Adds a "LazyVPN" entry to the main Omarchy menu (`SUPER+ALT+SPACE`).
 -   **Dedicated Keybinding**: Launch the menu instantly with `SUPER+L` (automatically registered in the Omarchy keybind help menu at `SUPER+K`).
--   **Passwordless Operation**: A secure `sudoers` configuration covers all VPN operations (connections, disconnections, killswitch updates). Password only required during installation and uninstallation.
+-   **Passwordless Operation (Optional)**: During installation, you can choose to enable passwordless sudo for specific VPN-related commands only (`networkctl`, `ip route`, `iptables`, systemd-networkd operations). If disabled, you'll be prompted for password when connecting/disconnecting.
 -   **Desktop Notifications**: Provides clear notifications for connects, disconnects, and other key events.
 -   **Smart Change Detection**: Automatically detects when you add or remove `.conf` files and notifies you.
 
@@ -201,6 +201,14 @@
     ./install_lazyVPN.sh
     ```
     The installer handles everything: dependencies, script installation, `sudo` rights, and desktop integration.
+
+    During installation, you'll be asked whether to enable **passwordless sudo** for VPN operations:
+    - **Yes (default)**: Allows specific VPN-related commands (`networkctl`, `ip route`, `iptables`, systemd-networkd) to run without password prompts
+    - **No**: You'll be prompted for password during VPN operations (more secure for shared systems)
+
+    Note: This only permits the specific commands needed for VPN management, not blanket sudo access.
+
+    You can change this choice anytime by uninstalling and reinstalling (your server configs are preserved).
 
 ## First-Time Setup
 
