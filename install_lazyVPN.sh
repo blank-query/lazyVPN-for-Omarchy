@@ -141,9 +141,26 @@ for script in "$SCRIPT_DIR"/bin/lazyvpn-*; do
 done
 
 echo ""
-echo "Step 3: Installing sudoers configuration (passwordless VPN operations)..."
+echo "Step 3: Configuring VPN operations..."
+echo ""
+echo "LazyVPN can configure passwordless sudo for specific VPN-related commands:"
+echo "  • networkctl, ip route, iptables"
+echo "  • systemd-networkd operations"
+echo "  • LazyVPN killswitch scripts"
+echo ""
+echo "This allows seamless connection/disconnection without password prompts."
+echo "Only these specific commands are permitted, not blanket sudo access."
+echo ""
+echo "If disabled, you'll be prompted for password during VPN operations."
+echo "(You can change this later by uninstalling and reinstalling)"
+echo ""
+read -r -p "Enable passwordless sudo for VPN commands? [Y/n] " passwordless_choice
+echo ""
 
-# Create sudoers file for passwordless sudo
+if [[ ! "$passwordless_choice" =~ ^[Nn]$ ]]; then
+  echo "Installing sudoers configuration (passwordless VPN operations)..."
+
+  # Create sudoers file for passwordless sudo
 SUDOERS_TEMP=$(mktemp)
 cat > "$SUDOERS_TEMP" <<EOF
 # LazyVPN sudoers configuration
@@ -188,6 +205,10 @@ fi
 
 # Clean up temp file
 rm -f "$SUDOERS_TEMP"
+else
+  echo "Skipping passwordless sudo configuration"
+  echo "You will be prompted for password during VPN operations"
+fi
 
 echo ""
 echo "Step 4: Initializing LazyVPN..."
