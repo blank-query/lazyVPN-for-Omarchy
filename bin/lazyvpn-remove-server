@@ -216,12 +216,16 @@ while IFS='|' read -r display_name file_path validation_status is_connected; do
     echo "  🟢 Skipped (currently connected): $filename"
     ((SKIPPED_CONNECTED++))
   else
-    # Remove the config file
-    rm -f "$file_path"
+    # Securely delete the config file (contains private keys)
+    if shred -u "$file_path" 2>/dev/null; then
+      : # Successfully shredded
+    else
+      rm -f "$file_path"  # Fallback to regular deletion
+    fi
 
-    # Remove from performance history
+    # Securely delete performance history (contains usage metadata)
     if [[ -f "$PERF_DIR/${filename}.log" ]]; then
-      rm -f "$PERF_DIR/${filename}.log"
+      shred -u "$PERF_DIR/${filename}.log" 2>/dev/null || rm -f "$PERF_DIR/${filename}.log"
     fi
 
     # Check and update config file if this was the last connected server

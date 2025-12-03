@@ -121,6 +121,18 @@
     -   Can be toggled from the menu if you need to use IPv6.
 -   **🧪 DNS Leak Test**:
     -   A built-in test to verify that your DNS queries are being correctly routed through the VPN's DNS servers, not your ISP's.
+-   **🗑️ Secure Deletion**:
+    -   **During Normal Usage**:
+        -   When adding servers: Optional prompt to securely delete original `.conf` files from Downloads (after successful import)
+        -   When removing servers: Automatically shreds server config and its performance history
+    -   **During Uninstall**:
+        -   Performance history logs (usage metadata) - always shredded
+        -   LazyVPN config files - always shredded
+        -   Server configs (private keys) - shredded if user chooses to delete them
+        -   systemd-networkd files (private keys) - always shredded
+        -   System journal logs - optional surgical removal (only files containing VPN logs, preserves clean journals)
+        -   Shell history - automatically cleaned of all VPN-related commands (bash, zsh, fish)
+    -   All secure deletion uses `shred` with 3-pass overwrite to prevent forensic recovery
 -   **📁 Configuration Storage**:
     -   Server configurations are currently stored in plaintext in `~/.config/lazyvpn/wireguard/`
     -   **Note**: Encrypted storage is a planned optional feature (see [Roadmap](#roadmap))
@@ -135,8 +147,12 @@
         -   Connect to a `random` server.
         -   Connect to a `specific` server of your choice.
 -   **➕ Easy Server Management**:
-    -   **Add Servers**: A guided `fzf` interface to import `.conf` files from `~/Downloads` with automatic validation, provider detection, location detection (via IP geolocation if needed), standardized renaming, and duplicate prevention.
-    -   **Remove Servers**: Safely remove servers with automatic cleanup of performance history and configuration references.
+    -   **Add Servers**: A guided `fzf` interface to import `.conf` files from `~/Downloads` with:
+        -   Automatic validation (before and after import)
+        -   Provider detection and location detection (via IP geolocation if needed)
+        -   Standardized renaming and duplicate prevention
+        -   Optional cleanup prompt to securely delete original files from Downloads after successful import (uses `shred` to overwrite before deletion)
+    -   **Remove Servers**: Securely delete servers (configs shredded, not just deleted) with automatic cleanup of performance history and configuration references.
     -   Both accessible from `⚙️ Options` submenu.
 -   **✏️ Interface Renaming**: Easily rename the network interface (e.g., from `wg0` to `lazyvpn`) directly from the menu.
 -   **Robust Configuration**:
@@ -386,20 +402,35 @@ When viewing performance history:
 
 ## Uninstallation
 
-LazyVPN includes a comprehensive uninstaller that ensures clean removal:
+LazyVPN includes a comprehensive uninstaller with privacy-focused secure deletion:
 
 -   **Access Methods**:
     -   Run `lazyvpn-uninstall` from a terminal
     -   Select `⚙️ Options` → `🗑️ Uninstall LazyVPN` from the menu
+
 -   **Automatic Cleanup**: The installer detects installation failures and automatically runs the uninstaller to clean up partial installations.
--   **Config Preservation**: During uninstallation, you'll be asked whether to keep your configuration files (VPN configs and performance history) or remove everything.
+
+-   **Safe Uninstall**: If connected to a VPN, the uninstaller offers to disconnect for you - no need to leave the screen.
+
+-   **Secure Deletion (Privacy-Focused)**:
+    -   **Always Securely Deleted**:
+        -   Performance history logs (usage metadata) - shredded with 3-pass overwrite
+        -   LazyVPN config files (settings) - shredded
+        -   systemd-networkd files (private keys) - shredded
+        -   Shell history (VPN commands removed from bash/zsh/fish history)
+    -   **User Choice**:
+        -   Server configs (private keys) - you'll be asked if you want to delete them (shredded if yes)
+        -   System journal logs - optional surgical removal (only shreds journal files containing VPN connection logs, preserves clean system logs from other periods)
+    -   All secure deletion uses `shred` to overwrite files before deletion, preventing forensic recovery
+
 -   **What Gets Removed**:
     -   All LazyVPN scripts from `~/.local/share/omarchy/bin/`
     -   Firewall killswitch rules
     -   Sudoers configuration
     -   Desktop integrations (menu entries, autostart files, keybindings)
     -   Omarchy menu modifications
--   **Safe Uninstall**: If connected to a VPN, the uninstaller offers to disconnect for you - no need to leave the screen.
+
+-   **Privacy Result**: When choosing "yes" to all prompts, zero recoverable traces of VPN usage remain on the machine (no private keys, no connection timestamps, no server names, no command history).
 
 **Note**: The uninstaller is installed first during installation to ensure cleanup capability even if installation fails.
 
@@ -412,7 +443,7 @@ Future features and enhancements under consideration:
 ### 🔐 Encrypted Configuration Storage (Optional Feature)
 -   **Toggle-able Security**: Optional encryption for stored `.conf` files (disabled by default)
 -   **Automatic Encryption**: When enabled, encrypt `.conf` files before storing them in `~/.config/lazyvpn/wireguard/`
--   **Secure Cleanup**: Offer to securely delete plaintext `.conf` files from `~/Downloads` after import
+-   **Secure Deletion**: ✅ *Implemented* - Optional prompt to securely delete original `.conf` files from Downloads after import using `shred`
 -   **Transparent Decryption**: Decrypt configs on-the-fly when connecting, completely transparent to the user
 -   **Password Protection**: Password/passphrase protection for the encrypted config vault
 
