@@ -52,21 +52,9 @@ if [[ -f "$NETDEV_FILE" ]] || [[ -f "$NETWORK_FILE" ]]; then
     lazyvpn-disconnect
   fi
 
-  # Rename the files (requires sudo)
-  if [[ -f "$NETDEV_FILE" ]]; then
-    if ! sudo mv "$NETDEV_FILE" "/etc/systemd/network/99-${NEW_NAME}.netdev"; then
-      error "Failed to rename .netdev file (check sudo permissions)"
-    fi
-    # Update the Name field in the file
-    sudo sed -i "s/^Name=.*/Name=$NEW_NAME/" "/etc/systemd/network/99-${NEW_NAME}.netdev"
-  fi
-
-  if [[ -f "$NETWORK_FILE" ]]; then
-    if ! sudo mv "$NETWORK_FILE" "/etc/systemd/network/99-${NEW_NAME}.network"; then
-      error "Failed to rename .network file (check sudo permissions)"
-    fi
-    # Update the Name field in the file
-    sudo sed -i "s/^Name=.*/Name=$NEW_NAME/" "/etc/systemd/network/99-${NEW_NAME}.network"
+  # Rename the files using secure file helper (validates inputs and prevents symlink attacks)
+  if ! sudo "$SCRIPT_DIR/lazyvpn-file-helper" rename "$CURRENT_NAME" "$NEW_NAME"; then
+    error "Failed to rename configuration files"
   fi
 
   # Restart systemd-networkd to apply changes

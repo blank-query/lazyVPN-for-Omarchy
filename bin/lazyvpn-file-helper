@@ -1,0 +1,177 @@
+#!/bin/bash
+
+# LazyVPN File Helper - Secure sudo wrapper for file operations
+# This script validates all inputs before performing privileged file operations
+
+set -e
+
+# Must run as root
+if [[ $EUID -ne 0 ]]; then
+  echo "Error: This script must be run with sudo"
+  exit 1
+fi
+
+# Validate connection name (alphanumeric, dash, underscore only)
+validate_conn_name() {
+  local name="$1"
+  if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: Invalid connection name: $name"
+    exit 1
+  fi
+  if [[ "$name" =~ \.\. ]]; then
+    echo "Error: Path traversal detected"
+    exit 1
+  fi
+}
+
+# Validate file path - must be in /etc/systemd/network/ and no symlinks
+validate_path() {
+  local path="$1"
+  local realpath_result
+
+  # Must be absolute path
+  if [[ ! "$path" =~ ^/ ]]; then
+    echo "Error: Path must be absolute"
+    exit 1
+  fi
+
+  # Must be in /etc/systemd/network/
+  if [[ ! "$path" =~ ^/etc/systemd/network/99-wg ]]; then
+    echo "Error: Path must be in /etc/systemd/network/99-wg*"
+    exit 1
+  fi
+
+  # Check for symlinks in parent directory
+  local dir=$(dirname "$path")
+  if [[ -L "$dir" ]]; then
+    echo "Error: Symlink detected in path"
+    exit 1
+  fi
+
+  # If file exists, check it's not a symlink
+  if [[ -e "$path" ]] && [[ -L "$path" ]]; then
+    echo "Error: Target is a symlink"
+    exit 1
+  fi
+}
+
+# Validate file content (basic WireGuard config validation)
+validate_netdev_content() {
+  local content="$1"
+
+  # Must contain [NetDev] and [WireGuard]
+  if ! echo "$content" | grep -q '^\[NetDev\]'; then
+    echo "Error: Invalid netdev content - missing [NetDev]"
+    exit 1
+  fi
+
+  if ! echo "$content" | grep -q '^\[WireGuard\]'; then
+    echo "Error: Invalid netdev content - missing [WireGuard]"
+    exit 1
+  fi
+}
+
+validate_network_content() {
+  local content="$1"
+
+  # Must contain [Match] and [Network]
+  if ! echo "$content" | grep -q '^\[Match\]'; then
+    echo "Error: Invalid network content - missing [Match]"
+    exit 1
+  fi
+
+  if ! echo "$content" | grep -q '^\[Network\]'; then
+    echo "Error: Invalid network content - missing [Network]"
+    exit 1
+  fi
+}
+
+# Command dispatcher
+case "$1" in
+  write-netdev)
+    # Usage: lazyvpn-file-helper write-netdev CONNECTION_NAME < content
+    validate_conn_name "$2"
+    FILE="/etc/systemd/network/99-${2}.netdev"
+    validate_path "$FILE"
+
+    # Read content from stdin
+    CONTENT=$(cat)
+    validate_netdev_content "$CONTENT"
+
+    # Write file with restricted permissions
+    echo "$CONTENT" > "$FILE"
+    chmod 640 "$FILE"
+    echo "Wrote: $FILE"
+    ;;
+
+  write-network)
+    # Usage: lazyvpn-file-helper write-network CONNECTION_NAME < content
+    validate_conn_name "$2"
+    FILE="/etc/systemd/network/99-${2}.network"
+    validate_path "$FILE"
+
+    # Read content from stdin
+    CONTENT=$(cat)
+    validate_network_content "$CONTENT"
+
+    # Write file with restricted permissions
+    echo "$CONTENT" > "$FILE"
+    chmod 640 "$FILE"
+    echo "Wrote: $FILE"
+    ;;
+
+  remove)
+    # Usage: lazyvpn-file-helper remove CONNECTION_NAME
+    validate_conn_name "$2"
+    NETDEV="/etc/systemd/network/99-${2}.netdev"
+    NETWORK="/etc/systemd/network/99-${2}.network"
+
+    validate_path "$NETDEV"
+    validate_path "$NETWORK"
+
+    rm -f "$NETDEV" "$NETWORK"
+    echo "Removed: $NETDEV $NETWORK"
+    ;;
+
+  rename)
+    # Usage: lazyvpn-file-helper rename OLD_NAME NEW_NAME
+    validate_conn_name "$2"
+    validate_conn_name "$3"
+
+    OLD_NETDEV="/etc/systemd/network/99-${2}.netdev"
+    OLD_NETWORK="/etc/systemd/network/99-${2}.network"
+    NEW_NETDEV="/etc/systemd/network/99-${3}.netdev"
+    NEW_NETWORK="/etc/systemd/network/99-${3}.network"
+
+    validate_path "$OLD_NETDEV"
+    validate_path "$OLD_NETWORK"
+    validate_path "$NEW_NETDEV"
+    validate_path "$NEW_NETWORK"
+
+    # Rename files and update Name= field
+    if [[ -f "$OLD_NETDEV" ]]; then
+      sed "s/^Name=.*/Name=$3/" "$OLD_NETDEV" > "$NEW_NETDEV"
+      chmod 640 "$NEW_NETDEV"
+      rm -f "$OLD_NETDEV"
+    fi
+
+    if [[ -f "$OLD_NETWORK" ]]; then
+      sed "s/^Name=.*/Name=$3/" "$OLD_NETWORK" > "$NEW_NETWORK"
+      chmod 640 "$NEW_NETWORK"
+      rm -f "$OLD_NETWORK"
+    fi
+
+    echo "Renamed: $2 -> $3"
+    ;;
+
+  *)
+    echo "LazyVPN File Helper - Secure file operations for VPN configs"
+    echo ""
+    echo "Usage:"
+    echo "  $0 write-netdev CONNECTION_NAME < content"
+    echo "  $0 write-network CONNECTION_NAME < content"
+    echo "  $0 remove CONNECTION_NAME"
+    echo "  $0 rename OLD_NAME NEW_NAME"
+    exit 1
+    ;;
+esac

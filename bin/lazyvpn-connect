@@ -123,11 +123,10 @@ if [[ "${KILLSWITCH:-false}" == "true" ]]; then
   echo ""
 fi
 
-# Create the .netdev file
-NETDEV_FILE="/etc/systemd/network/99-${CONN_NAME}.netdev"
-info "Creating netdev file: $NETDEV_FILE"
+# Create the .netdev file using secure file helper
+info "Creating netdev file..."
 
-cat << EOF | sudo tee "$NETDEV_FILE" > /dev/null
+cat << EOF | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-netdev "$CONN_NAME"
 [NetDev]
 Name=$CONN_NAME
 Kind=wireguard
@@ -143,11 +142,10 @@ Endpoint=$ENDPOINT
 PersistentKeepalive=$PERSISTENT_KEEPALIVE
 EOF
 
-# Create the .network file
-NETWORK_FILE="/etc/systemd/network/99-${CONN_NAME}.network"
-info "Creating network file: $NETWORK_FILE"
+# Create the .network file using secure file helper
+info "Creating network file..."
 
-cat << EOF | sudo tee "$NETWORK_FILE" > /dev/null
+cat << EOF | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-network "$CONN_NAME"
 [Match]
 Name=$CONN_NAME
 

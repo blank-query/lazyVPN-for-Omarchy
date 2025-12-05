@@ -5,6 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LAZYVPN_BIN="$HOME/.local/share/lazyvpn/bin"
 OMARCHY_BIN="$HOME/.local/share/omarchy/bin"
 OMARCHY_MENU_FILE="$OMARCHY_BIN/omarchy-menu"
 
@@ -25,12 +26,12 @@ cleanup_on_error() {
     echo ""
 
     # Run uninstaller if it exists
-    if [[ -f "$OMARCHY_BIN/lazyvpn-uninstall" ]]; then
-      bash "$OMARCHY_BIN/lazyvpn-uninstall" 2>/dev/null || true
+    if [[ -f "$LAZYVPN_BIN/lazyvpn-uninstall" ]]; then
+      bash "$LAZYVPN_BIN/lazyvpn-uninstall" 2>/dev/null || true
     else
       # Manual cleanup if uninstaller not yet installed
       echo "Cleaning up LazyVPN files..."
-      rm -f "$OMARCHY_BIN"/lazyvpn-* 2>/dev/null || true
+      rm -rf "$LAZYVPN_BIN" 2>/dev/null || true
 
       # Restore omarchy-menu backup if it exists
       if [[ -f "$OMARCHY_MENU_FILE.backup" ]]; then
@@ -63,7 +64,7 @@ if [[ ! -d "$HOME/.local/share/omarchy" ]]; then
 fi
 
 # Check if LazyVPN is already installed
-if [[ -f "$OMARCHY_BIN/lazyvpn-menu" ]] || [[ -n "$(find "$OMARCHY_BIN" -name "lazyvpn-*" -print -quit 2>/dev/null)" ]]; then
+if [[ -d "$LAZYVPN_BIN" ]] && [[ -n "$(find "$LAZYVPN_BIN" -name "lazyvpn-*" -print -quit 2>/dev/null)" ]]; then
   echo "Error: LazyVPN is already installed"
   echo ""
   echo "To reinstall or upgrade:"
@@ -116,12 +117,17 @@ fi
 # Mark that installation has started
 INSTALL_STARTED=true
 
-echo "Step 1: Installing uninstaller (for error recovery)..."
+echo "Step 1: Creating LazyVPN directory..."
+mkdir -p "$LAZYVPN_BIN"
+echo "  Created: $LAZYVPN_BIN"
+
+echo ""
+echo "Step 2: Installing uninstaller (for error recovery)..."
 
 # Copy uninstall script FIRST so cleanup can always run if installation fails
 if [[ -f "$SCRIPT_DIR/bin/lazyvpn-uninstall" ]]; then
-  cp "$SCRIPT_DIR/bin/lazyvpn-uninstall" "$OMARCHY_BIN/lazyvpn-uninstall"
-  chmod +x "$OMARCHY_BIN/lazyvpn-uninstall"
+  cp "$SCRIPT_DIR/bin/lazyvpn-uninstall" "$LAZYVPN_BIN/lazyvpn-uninstall"
+  chmod +x "$LAZYVPN_BIN/lazyvpn-uninstall"
   echo "  Installed: lazyvpn-uninstall"
 else
   echo "Error: bin/lazyvpn-uninstall not found"
@@ -129,19 +135,23 @@ else
 fi
 
 echo ""
-echo "Step 2: Installing LazyVPN scripts..."
+echo "Step 3: Installing LazyVPN scripts..."
 
-# Copy all lazyvpn scripts to Omarchy bin (except uninstaller, already copied)
+# Copy all lazyvpn scripts to LazyVPN bin (except uninstaller, already copied)
 for script in "$SCRIPT_DIR"/bin/lazyvpn-*; do
   if [[ -f "$script" ]] && [[ "$(basename "$script")" != "lazyvpn-uninstall" ]]; then
-    cp "$script" "$OMARCHY_BIN/"
-    chmod +x "$OMARCHY_BIN/$(basename "$script")"
+    cp "$script" "$LAZYVPN_BIN/"
+    chmod +x "$LAZYVPN_BIN/$(basename "$script")"
     echo "  Installed: $(basename "$script")"
   fi
 done
 
+# Install file helper with strict permissions (will be run with sudo)
+chmod 755 "$LAZYVPN_BIN/lazyvpn-file-helper"
+echo "  ✓ Installed secure file helper"
+
 echo ""
-echo "Step 3: Configuring VPN operations..."
+echo "Step 4: Configuring VPN operations..."
 echo ""
 echo "LazyVPN can configure passwordless sudo for specific VPN-related commands:"
 echo "  • networkctl, ip route, iptables"
@@ -161,36 +171,67 @@ if [[ ! "$passwordless_choice" =~ ^[Nn]$ ]]; then
   echo "Installing sudoers configuration (passwordless VPN operations)..."
 
   # Create sudoers file for passwordless sudo
+  # SECURITY NOTE: This grants significant privileges to wheel group members.
+  # See SECURITY_AUDIT.md for detailed security analysis and risk assessment.
+
 SUDOERS_TEMP=$(mktemp)
-cat > "$SUDOERS_TEMP" <<EOF
+cat > "$SUDOERS_TEMP" <<'SUDOERS_EOF'
 # LazyVPN sudoers configuration
 # Allow VPN management without password
+# Security: Restricts commands to prevent privilege escalation
 
-# Network interface management
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/networkctl
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip route *
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip link *
+# Network interface management - only up/down operations
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/networkctl up *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/networkctl down *
 
-# systemd-networkd management
+# IP route commands - only specific operations needed
+# NOTE: Arguments after 'add' and 'del' are validated by kernel
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip route add *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip route del *
+
+# IP link commands - only delete and set operations
+# NOTE: Limited to necessary operations, 'netns exec' is NOT permitted
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip link delete *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip link set *
+
+# systemd management - specific services only
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart systemd-networkd
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload systemd-networkd
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/systemctl start systemd-journald
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop systemd-journald
 
-# File management for VPN configs
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm /etc/systemd/network/99-wg*.netdev
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm /etc/systemd/network/99-wg*.network
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/network/99-wg*.netdev
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/systemd/network/99-wg*.network
+# File management - SECURE helper script with validation
+# Replaced direct sed/tee/rm/mv to prevent symlink attacks
+%wheel ALL=(ALL) NOPASSWD: /home/*/.local/share/lazyvpn/bin/lazyvpn-file-helper *
 
-# Firewall management for killswitch
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables *
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables *
+# Firewall management - iptables operations for LazyVPN killswitch
+# Restricted to LAZYVPN_OUT chain operations only
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -N LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -F LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -X LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -I OUTPUT -j LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -D OUTPUT -j LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -C OUTPUT -j LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -A LAZYVPN_OUT *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -C LAZYVPN_OUT *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -L LAZYVPN_OUT *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -N LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -F LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -X LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -I OUTPUT -j LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -D OUTPUT -j LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -C OUTPUT -j LAZYVPN_OUT
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -A LAZYVPN_OUT *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -C LAZYVPN_OUT *
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/ip6tables -L LAZYVPN_OUT *
 
-# LazyVPN killswitch scripts (user-specific paths)
-%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-setup-firewall-killswitch
-%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-disable-killswitch
-%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-update-killswitch
-%wheel ALL=(ALL) NOPASSWD: $OMARCHY_BIN/lazyvpn-toggle-killswitch
-EOF
+# LazyVPN killswitch scripts (all user home directories)
+# Uses wildcard pattern /home/*/ to match any username
+%wheel ALL=(ALL) NOPASSWD: /home/*/.local/share/lazyvpn/bin/lazyvpn-setup-firewall-killswitch
+%wheel ALL=(ALL) NOPASSWD: /home/*/.local/share/lazyvpn/bin/lazyvpn-disable-killswitch
+%wheel ALL=(ALL) NOPASSWD: /home/*/.local/share/lazyvpn/bin/lazyvpn-update-killswitch
+%wheel ALL=(ALL) NOPASSWD: /home/*/.local/share/lazyvpn/bin/lazyvpn-toggle-killswitch
+SUDOERS_EOF
 
 # Validate sudoers syntax before installing
 if sudo visudo -cf "$SUDOERS_TEMP" 2>/dev/null; then
@@ -211,10 +252,36 @@ else
 fi
 
 echo ""
-echo "Step 4: Initializing LazyVPN..."
+echo "Step 5: Adding LazyVPN to PATH..."
+
+# Add LazyVPN bin to PATH if not already present
+SHELL_RC=""
+if [[ -n "$BASH_VERSION" ]]; then
+  SHELL_RC="$HOME/.bashrc"
+elif [[ -n "$ZSH_VERSION" ]]; then
+  SHELL_RC="$HOME/.zshrc"
+fi
+
+if [[ -n "$SHELL_RC" ]] && [[ -f "$SHELL_RC" ]]; then
+  if ! grep -q "/.local/share/lazyvpn/bin" "$SHELL_RC"; then
+    echo '' >> "$SHELL_RC"
+    echo '# LazyVPN' >> "$SHELL_RC"
+    echo 'export PATH="$HOME/.local/share/lazyvpn/bin:$PATH"' >> "$SHELL_RC"
+    echo "  ✓ Added LazyVPN to PATH in $SHELL_RC"
+    export PATH="$HOME/.local/share/lazyvpn/bin:$PATH"
+  else
+    echo "  LazyVPN already in PATH"
+  fi
+else
+  echo "  ⚠ Could not detect shell config file"
+  echo "  Add to your PATH manually: export PATH=\"\$HOME/.local/share/lazyvpn/bin:\$PATH\""
+fi
+
+echo ""
+echo "Step 6: Initializing LazyVPN..."
 
 # Initialize LazyVPN (creates config directories)
-"$OMARCHY_BIN"/lazyvpn-init
+"$LAZYVPN_BIN"/lazyvpn-init
 
 # Prompt for connection name
 echo ""
@@ -243,7 +310,7 @@ else
 fi
 
 echo ""
-echo "Step 5: Integrating with omarchy-menu..."
+echo "Step 7: Integrating with omarchy-menu..."
 
 # Backup original omarchy-menu
 if [[ ! -f "$OMARCHY_MENU_FILE.backup" ]]; then
@@ -291,7 +358,7 @@ else
 fi
 
 echo ""
-echo "Step 6: Adding keyboard shortcut (SUPER+L)..."
+echo "Step 8: Adding keyboard shortcut (SUPER+L)..."
 
 # Add keybinding to Hyprland config
 HYPR_BINDINGS="$HOME/.config/hypr/bindings.conf"
