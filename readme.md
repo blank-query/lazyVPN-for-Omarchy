@@ -29,8 +29,8 @@
 -   **Speed & Efficiency**: Every action is a few keystrokes away. No mouse required.
 -   **Control**: Granular control over your connection, security, and automation.
 -   **Intelligence**: The system is smart. It detects providers, parses server names, and automatically handles complex tasks.
--   **Resilience**: With features like the auto-recover daemon and atomic configuration saves, LazyVPN is built to be reliable.
--   **Transparency**: Understand your connection with detailed status info, performance tests, and leak protection.
+-   **Resilience**: With features like connection verification, auto-recover daemon, retry logic, and atomic configuration saves, LazyVPN is built to be reliable.
+-   **Transparency**: Understand your connection with detailed status info, IP verification, performance tests, and leak protection.
 
 ---
 
@@ -94,13 +94,19 @@
     -   **🎲 Random Server**: Connect to a randomly selected server for effortless privacy.
     -   **🌍 Choose Server**: Select a server from a filterable, `fzf`-powered list with a detailed preview panel.
     -   **🔄 Last Used Server**: Instantly reconnect to your most recent server.
+-   **Connection Verification**:
+    -   **IP Verification**: Every connection and disconnection is verified by comparing public IP addresses before and after the operation.
+    -   **Automatic Failure Detection**: If traffic is not routing through the VPN, the connection is automatically detected as failed.
+    -   **Intelligent Retry Logic**: On connection failure, you're prompted to retry or reconnect to your previous server.
+    -   **Clean Failure Handling**: Failed connections are automatically cleaned up - no ghost interfaces or incorrect menu status.
+    -   **Killswitch-Aware**: Verification logic adapts based on whether the killswitch is active or not.
 -   **Smart Server Display**:
     -   **Automatic Server Renaming**: When adding servers, LazyVPN automatically renames them to a standardized format using provider detection, filename parsing, and IP geolocation as fallback.
     -   **Pretty Names**: Displays servers with full location names and country flags (e.g., `🇺🇸 United States - New York (123) • ProtonVPN`).
     -   **Feature Emojis**: Visual indicators show server capabilities at a glance: 🔄 P2P/Torrenting, 🔒 Secure Core, 🧅 Tor, 🤡 Free Tier, 🚀 VPN Accelerator, 🗡️ NetShield Level 1, ⚔️ NetShield Level 2, 🎮 Moderate NAT.
     -   **Provider Detection**: Intelligently detects VPN providers (ProtonVPN, Mullvad, IVPN, PIA, NordVPN, Surfshark, etc.) from endpoint, DNS, or config file contents.
--   **Connection Status**: The menu bar always shows your real-time status (`🟢 CONNECTED` or `🔴 DISCONNECTED`) and the currently connected server.
--   **Seamless Server Switching**: Switches between servers gracefully, automatically updating firewall rules and routes.
+-   **Connection Status**: The menu bar always shows your real-time, verified status (`🟢 CONNECTED` or `🔴 DISCONNECTED`) and the currently connected server.
+-   **Seamless Server Switching**: Switches between servers gracefully, automatically updating firewall rules and routes with full verification.
 
 ### 🛡️ Security & Privacy
 

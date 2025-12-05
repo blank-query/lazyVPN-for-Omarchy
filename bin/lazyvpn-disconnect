@@ -66,7 +66,8 @@ fi
 info "Restarting systemd-networkd..."
 sudo systemctl restart systemd-networkd
 
-info "Disconnected successfully"
+echo ""
+info "Verifying disconnection..."
 
 # Load current config to check killswitch auto-disable setting
 load_config "$CONFIG_FILE"
@@ -114,17 +115,73 @@ if [[ "${KILLSWITCH:-false}" == "true" ]] && sudo iptables -C LAZYVPN_OUT -j DRO
   esac
 fi
 
-# Show public IP after disconnect (if killswitch is not active)
-if [[ "${KILLSWITCH:-false}" != "true" ]] || ! sudo iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
+# Verify disconnection by checking IP
+DISCONNECT_FAILED=false
+FAILURE_REASON=""
+
+# Check if killswitch is still blocking
+KILLSWITCH_BLOCKING=false
+if sudo iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
+  KILLSWITCH_BLOCKING=true
+fi
+
+if [[ "$KILLSWITCH_BLOCKING" == "true" ]]; then
+  # Killswitch is active - we should NOT be able to get an IP
+  echo ""
+  info "Killswitch is active - verifying traffic is blocked..."
+  sleep 2
+
+  AFTER_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+
+  if [[ -n "$AFTER_IP" ]]; then
+    # We got an IP when killswitch should be blocking - FAILURE
+    DISCONNECT_FAILED=true
+    FAILURE_REASON="Killswitch enabled but traffic is not blocked (IP: $AFTER_IP)"
+  else
+    # No IP - killswitch is working correctly
+    info "✓ Killswitch verification passed - traffic blocked"
+  fi
+else
+  # Killswitch is disabled - IP should have changed
   echo ""
   info "Checking public IP..."
   sleep 2
 
-  PUBLIC_IP=$(curl -s --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null)
+  AFTER_IP=$(curl -s --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null)
 
-  if [[ -n "$PUBLIC_IP" ]]; then
-    info "Public IP: $PUBLIC_IP (disconnected)"
+  if [[ -z "$AFTER_IP" ]]; then
+    # Can't get IP when we should be able to
+    DISCONNECT_FAILED=true
+    FAILURE_REASON="Unable to retrieve public IP after disconnect"
+  elif [[ "$AFTER_IP" == "$BEFORE_IP" ]]; then
+    # IP didn't change - still showing VPN IP
+    DISCONNECT_FAILED=true
+    FAILURE_REASON="Still showing VPN IP (IP unchanged: $AFTER_IP)"
   else
-    info "Public IP: Unable to retrieve"
+    # IP changed - successful disconnect
+    info "Public IP: $AFTER_IP"
+    info "✓ IP verification passed - disconnected from VPN"
   fi
 fi
+
+# Handle disconnection failure
+if [[ "$DISCONNECT_FAILED" == "true" ]]; then
+  echo ""
+  echo "Error: Disconnection failed - $FAILURE_REASON"
+
+  echo ""
+  read -r -p "Retry disconnection? [Y/n] " retry_response
+  if [[ "$retry_response" =~ ^[Nn]$ ]]; then
+    notify "Disconnection verification failed."
+    exit 1
+  else
+    # User wants to retry - re-run this script
+    echo ""
+    info "Retrying disconnection..."
+    exec "$0"
+  fi
+fi
+
+# All verification passed
+echo ""
+info "Successfully disconnected"

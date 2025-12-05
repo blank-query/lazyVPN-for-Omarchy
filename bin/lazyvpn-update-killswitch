@@ -34,7 +34,15 @@ if [[ -n "$SUDO_USER" ]]; then
 else
   WG_DIR="$HOME/.config/lazyvpn/wireguard"
 fi
-LAST_CONNECTED_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$USER_CONFIG_FILE" | cut -d= -f2)
+
+# Get server name from argument or config
+if [[ -n "$1" ]]; then
+  # Server name passed as argument (for pre-connection killswitch updates)
+  LAST_CONNECTED_SERVER="$1"
+else
+  # No argument - read from config (existing behavior)
+  LAST_CONNECTED_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$USER_CONFIG_FILE" | cut -d= -f2)
+fi
 
 if [[ -z "$LAST_CONNECTED_SERVER" ]]; then
   # Run notify-send as the original user (not root)
