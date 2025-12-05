@@ -49,7 +49,7 @@ if [[ -f "$NETDEV_FILE" ]] || [[ -f "$NETWORK_FILE" ]]; then
   # Need to disconnect first to safely rename
   if is_connected "$CURRENT_NAME"; then
     info "Disconnecting to rename files..."
-    lazyvpn-disconnect
+    "$SCRIPT_DIR/lazyvpn-disconnect"
   fi
 
   # Rename the files using secure file helper (validates inputs and prevents symlink attacks)

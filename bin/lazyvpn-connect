@@ -114,7 +114,7 @@ if [[ "${KILLSWITCH:-false}" == "true" ]]; then
   info "Updating killswitch rules for new server endpoint..."
 
   # Update killswitch rules to allow the new endpoint (pass server name as argument)
-  if lazyvpn-update-killswitch "$SERVER_NAME"; then
+  if "$SCRIPT_DIR/lazyvpn-update-killswitch" "$SERVER_NAME"; then
     info "✓ Killswitch rules updated for new endpoint"
   else
     warn "Failed to update killswitch rules"
@@ -209,8 +209,16 @@ cleanup_failed_connection() {
   echo ""
   info "Cleaning up failed connection..."
   sudo networkctl down "$CONN_NAME" 2>/dev/null || true
-  sudo rm "/etc/systemd/network/99-${CONN_NAME}.netdev" 2>/dev/null || true
-  sudo rm "/etc/systemd/network/99-${CONN_NAME}.network" 2>/dev/null || true
+
+  # Remove systemd-networkd config files using secure file helper
+  if [[ -f "/etc/systemd/network/99-${CONN_NAME}.netdev" ]] || [[ -f "/etc/systemd/network/99-${CONN_NAME}.network" ]]; then
+    sudo "$SCRIPT_DIR/lazyvpn-file-helper" remove "$CONN_NAME" >/dev/null 2>&1 || {
+      # Fallback for backward compatibility if file helper not found
+      sudo rm "/etc/systemd/network/99-${CONN_NAME}.netdev" 2>/dev/null || true
+      sudo rm "/etc/systemd/network/99-${CONN_NAME}.network" 2>/dev/null || true
+    }
+  fi
+
   sudo systemctl restart systemd-networkd
 }
 

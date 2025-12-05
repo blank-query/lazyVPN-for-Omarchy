@@ -26,5 +26,5 @@ fi
 
 # If killswitch is currently enabled, reapply rules
 if [[ "$KILLSWITCH" == "true" ]]; then
-  lazyvpn-update-killswitch >/dev/null 2>&1
+  "$SCRIPT_DIR/lazyvpn-update-killswitch" >/dev/null 2>&1
 fi

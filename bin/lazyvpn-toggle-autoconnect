@@ -31,11 +31,12 @@ else
   fi
 
   # Create desktop file for autostart on boot
-  cat > "$DESKTOP_FILE" << 'EOF'
+  # Note: We need to use absolute path since desktop files don't inherit PATH
+  cat > "$DESKTOP_FILE" << EOF
 [Desktop Entry]
 Type=Application
 Name=LazyVPN Autostart
-Exec=lazyvpn-autostart-handler
+Exec=$SCRIPT_DIR/lazyvpn-autostart-handler
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true

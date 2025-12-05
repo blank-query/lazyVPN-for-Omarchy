@@ -119,4 +119,4 @@ echo "Lowest latency server: $PRETTY_NAME - ${BEST_LATENCY}ms"
 echo ""
 
 # Connect to the best server
-exec lazyvpn-connect "$BEST_SERVER"
+exec "$SCRIPT_DIR/lazyvpn-connect" "$BEST_SERVER"
