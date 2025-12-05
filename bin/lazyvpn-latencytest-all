@@ -85,7 +85,7 @@ if [[ "$TEST_DIRECT" == "true" ]]; then
   # Make sure we're disconnected
   if is_connected "${CONNECTION_NAME:-wg0}"; then
     info "Disconnecting from VPN to test direct connection..."
-    lazyvpn-disconnect >/dev/null 2>&1
+    "$SCRIPT_DIR/lazyvpn-disconnect" >/dev/null 2>&1
     sleep 2
   fi
 
@@ -204,6 +204,6 @@ echo ""
 # Restore original connection if we disconnected for the direct test
 if [[ "$TEST_DIRECT" == "true" ]] && [[ -n "$ORIGINAL_CONN" ]]; then
   info "Restoring original connection to $ORIGINAL_CONN..."
-  lazyvpn-connect "$ORIGINAL_CONN" >/dev/null 2>&1
+  "$SCRIPT_DIR/lazyvpn-connect" "$ORIGINAL_CONN" >/dev/null 2>&1
   echo ""
 fi

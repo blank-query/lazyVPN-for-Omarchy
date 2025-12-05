@@ -324,11 +324,11 @@ if grep -q "LazyVPN" "$OMARCHY_MENU_FILE"; then
 else
   # Use a single, robust awk script to perform all three modifications.
   # This is the most reliable method and avoids all sed portability issues.
-  awk '
+  awk -v lazyvpn_bin="$LAZYVPN_BIN" '
     # 1. Before the line containing show_main_menu(), print our new function.
     /^show_main_menu\(\)/ {
       print "show_lazyvpn_menu() {"
-      print "  lazyvpn-menu"
+      print "  " lazyvpn_bin "/lazyvpn-menu"
       print "}"
       print ""
     }
@@ -368,7 +368,7 @@ if [[ -f "$HYPR_BINDINGS" ]]; then
   else
     echo "" >> "$HYPR_BINDINGS"
     echo "# LazyVPN" >> "$HYPR_BINDINGS"
-    echo "bindd = SUPER, L, LazyVPN, exec, lazyvpn-menu" >> "$HYPR_BINDINGS"
+    echo "bindd = SUPER, L, LazyVPN, exec, $LAZYVPN_BIN/lazyvpn-menu" >> "$HYPR_BINDINGS"
     echo "  ✓ Added SUPER+L keybinding to Hyprland"
 
     # Reload Hyprland config
@@ -386,7 +386,7 @@ if [[ -f "$KEYBINDINGS_SCRIPT" ]]; then
     echo "  LazyVPN already in keybindings helper"
   else
     # Add LazyVPN to static_bindings() function
-    sed -i '/static_bindings() {/a\    echo "SUPER,L,LazyVPN,exec,lazyvpn-menu"' "$KEYBINDINGS_SCRIPT"
+    sed -i "/static_bindings() {/a\\    echo \"SUPER,L,LazyVPN,exec,$LAZYVPN_BIN/lazyvpn-menu\"" "$KEYBINDINGS_SCRIPT"
     echo "  ✓ Added to keybindings helper (SUPER+K)"
   fi
 else

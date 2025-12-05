@@ -109,7 +109,7 @@ if [[ "$TEST_DIRECT" == "true" ]]; then
   # Make sure we're disconnected
   if is_connected "${CONNECTION_NAME:-wg0}"; then
     info "Disconnecting from VPN to test direct connection..."
-    lazyvpn-disconnect >/dev/null 2>&1
+    "$SCRIPT_DIR/lazyvpn-disconnect" >/dev/null 2>&1
     sleep 2
   fi
 
@@ -173,7 +173,7 @@ for conf in "$WG_DIR"/*.conf; do
 
   # Connect to server
   echo "  Connecting..."
-  if ! lazyvpn-connect "$filename" >/dev/null 2>&1; then
+  if ! "$SCRIPT_DIR/lazyvpn-connect" "$filename" >/dev/null 2>&1; then
     echo "  ✗ Connection failed"
     echo "$filename|$provider|0|failed|" >> "$RESULTS_FILE"
     continue
@@ -184,7 +184,7 @@ for conf in "$WG_DIR"/*.conf; do
   if ! ip link show "$CONN_NAME" &>/dev/null; then
     echo "  ✗ VPN interface not created"
     echo "$filename|$provider|0|failed|" >> "$RESULTS_FILE"
-    lazyvpn-disconnect >/dev/null 2>&1
+    "$SCRIPT_DIR/lazyvpn-disconnect" >/dev/null 2>&1
     sleep 5  # Wait for backend to clear session
     continue
   fi
@@ -209,7 +209,7 @@ for conf in "$WG_DIR"/*.conf; do
   if [[ "$PING_SUCCESS" != "true" ]]; then
     echo "  ✗ Connection has no internet access"
     echo "$filename|$provider|0|no-internet|" >> "$RESULTS_FILE"
-    lazyvpn-disconnect >/dev/null 2>&1
+    "$SCRIPT_DIR/lazyvpn-disconnect" >/dev/null 2>&1
     sleep 5  # Wait for backend to clear session
     continue
   fi
@@ -223,7 +223,7 @@ for conf in "$WG_DIR"/*.conf; do
     if [[ "$TEST_IP" == "$INITIAL_IP" ]]; then
       echo "  ✗ Public IP unchanged - traffic not routing through VPN"
       echo "$filename|$provider|0|routing-failed|$TEST_IP" >> "$RESULTS_FILE"
-      lazyvpn-disconnect >/dev/null 2>&1
+      "$SCRIPT_DIR/lazyvpn-disconnect" >/dev/null 2>&1
       sleep 5  # Wait for backend to clear session
       continue
     fi
@@ -258,7 +258,7 @@ for conf in "$WG_DIR"/*.conf; do
 
   # Disconnect
   echo "  Disconnecting..."
-  lazyvpn-disconnect >/dev/null 2>&1
+  "$SCRIPT_DIR/lazyvpn-disconnect" >/dev/null 2>&1
 
   # Wait for ProtonVPN backend to clear the session before next connection
   # This prevents hitting concurrent connection limits when switching servers rapidly
@@ -316,7 +316,7 @@ if [[ -n "$ORIGINAL_CONN" ]]; then
   read -r -p "Reconnect to original server ($ORIGINAL_CONN)? [Y/n] " response
   if [[ ! "$response" =~ ^[Nn]$ ]]; then
     echo "Reconnecting to $ORIGINAL_CONN..."
-    lazyvpn-connect "$ORIGINAL_CONN"
+    "$SCRIPT_DIR/lazyvpn-connect" "$ORIGINAL_CONN"
   fi
 fi
 

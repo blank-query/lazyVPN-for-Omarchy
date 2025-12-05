@@ -42,23 +42,23 @@ fi
 # Determine which server to connect to
 case "$AUTOCONNECT_MODE" in
   quickest)
-    lazyvpn-quickest
+    "$SCRIPT_DIR/lazyvpn-quickest"
     ;;
   random)
-    lazyvpn-random
+    "$SCRIPT_DIR/lazyvpn-random"
     ;;
   last_used)
     if [[ -n "$LAST_CONNECTED_SERVER" ]]; then
-      lazyvpn-connect "$LAST_CONNECTED_SERVER"
+      "$SCRIPT_DIR/lazyvpn-connect" "$LAST_CONNECTED_SERVER"
     else
       # Fallback to random if no last used server
       warn "No last used server found, connecting to random server"
-      lazyvpn-random
+      "$SCRIPT_DIR/lazyvpn-random"
     fi
     ;;
   specific)
     if [[ -n "$AUTOCONNECT_SERVER" ]]; then
-      lazyvpn-connect "$AUTOCONNECT_SERVER"
+      "$SCRIPT_DIR/lazyvpn-connect" "$AUTOCONNECT_SERVER"
     else
       warn "No specific server configured for autoconnect"
     fi
