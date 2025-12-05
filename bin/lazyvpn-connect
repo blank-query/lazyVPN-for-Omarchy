@@ -113,13 +113,8 @@ if [[ "${KILLSWITCH:-false}" == "true" ]]; then
   echo ""
   info "Updating killswitch rules for new server endpoint..."
 
-  # Temporarily update LAST_CONNECTED_SERVER so lazyvpn-update-killswitch uses the new server
-  if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_FILE"; then
-    warn "Failed to update server name in config"
-  fi
-
-  # Update killswitch rules to allow the new endpoint
-  if lazyvpn-update-killswitch; then
+  # Update killswitch rules to allow the new endpoint (pass server name as argument)
+  if lazyvpn-update-killswitch "$SERVER_NAME"; then
     info "✓ Killswitch rules updated for new endpoint"
   else
     warn "Failed to update killswitch rules"
@@ -194,13 +189,8 @@ fi
 # Add default route through VPN interface with lower metric (preferred over existing default)
 sudo ip route add default dev "$CONN_NAME" metric 100 2>/dev/null || warn "Route configuration may need adjustment"
 
-# Update last connected server in config (atomic)
-if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_FILE"; then
-  warn "Connected successfully but failed to save server name to config"
-  warn "Autoconnect 'last_used' mode may not work correctly"
-fi
-
-info "Successfully connected to $SERVER_DISPLAY"
+echo ""
+info "Verifying connection..."
 
 # Verify internet connectivity with retry logic
 # Try immediately first, only add delay if needed
@@ -216,47 +206,116 @@ for attempt in 1 2 3 4 5; do
   fi
 done
 
-if [[ "$PING_SUCCESS" == "true" ]]; then
+# Cleanup function for failed connections
+cleanup_failed_connection() {
+  echo ""
+  info "Cleaning up failed connection..."
+  sudo networkctl down "$CONN_NAME" 2>/dev/null || true
+  sudo rm "/etc/systemd/network/99-${CONN_NAME}.netdev" 2>/dev/null || true
+  sudo rm "/etc/systemd/network/99-${CONN_NAME}.network" 2>/dev/null || true
+  sudo systemctl restart systemd-networkd
+}
+
+# Check if ping succeeded
+CONNECTION_FAILED=false
+FAILURE_REASON=""
+
+if [[ "$PING_SUCCESS" != "true" ]]; then
+  CONNECTION_FAILED=true
+  FAILURE_REASON="No internet access detected"
+else
   # Try to get public IPv4
   PUBLIC_IP=$(curl -4 -s --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null)
 
-  if [[ -n "$PUBLIC_IP" ]] && [[ "$PUBLIC_IP" != "Unknown" ]]; then
-    info "Public IPv4: $PUBLIC_IP"
-  else
-    info "Public IPv4: Unable to retrieve (but connection is active)"
-  fi
-
-  # Check IPv6 leak protection
-  load_config "$USER_CONFIG_FILE"
-  if [[ "${DISABLE_IPV6:-true}" == "true" ]]; then
-    # Test for IPv6 connectivity (should fail if properly disabled)
-    PUBLIC_IPV6=$(curl -6 -s --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null)
-    if [[ -n "$PUBLIC_IPV6" ]]; then
-      warn "⚠️  IPv6 leak detected: $PUBLIC_IPV6"
-      warn "Your IPv6 address may be exposed. Consider disabling IPv6 systemwide."
+  # Verify IP changed (proof that traffic is routing through VPN)
+  if [[ -z "$CURRENT_IP" ]]; then
+    # Killswitch was blocking before - just verify we GOT an IP now
+    if [[ -z "$PUBLIC_IP" ]] || [[ "$PUBLIC_IP" == "Unknown" ]]; then
+      CONNECTION_FAILED=true
+      FAILURE_REASON="Unable to retrieve public IP"
     else
-      info "✓ IPv6 properly disabled/blocked"
+      # Success: Got an IP when we couldn't before
+      info "Public IPv4: $PUBLIC_IP"
     fi
+  elif [[ -z "$PUBLIC_IP" ]] || [[ "$PUBLIC_IP" == "Unknown" ]]; then
+    # Had an IP before, can't get one now
+    CONNECTION_FAILED=true
+    FAILURE_REASON="Lost ability to retrieve public IP"
+  elif [[ "$PUBLIC_IP" == "$CURRENT_IP" ]]; then
+    # IP didn't change - connection failed
+    CONNECTION_FAILED=true
+    FAILURE_REASON="Traffic not routing through VPN (IP unchanged: $PUBLIC_IP)"
   else
-    # IPv6 enabled - check if it goes through VPN
-    PUBLIC_IPV6=$(curl -6 -s --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null)
-    if [[ -n "$PUBLIC_IPV6" ]]; then
-      info "Public IPv6: $PUBLIC_IPV6"
-    fi
+    # Success: IP changed
+    info "Public IPv4: $PUBLIC_IP"
+    info "✓ IP verification passed - traffic routing through VPN"
   fi
+fi
 
-  # Quick DNS leak check
-  if command -v resolvectl &>/dev/null; then
-    ACTIVE_DNS=$(resolvectl status "$CONN_NAME" 2>/dev/null | grep "DNS Servers" | awk '{print $3}')
-    if [[ -n "$ACTIVE_DNS" ]]; then
-      if [[ "$ACTIVE_DNS" == "$DNS" ]]; then
-        info "✓ DNS: $ACTIVE_DNS (via VPN)"
-      else
-        warn "⚠️  DNS mismatch - Expected: $DNS, Active: $ACTIVE_DNS"
+# Handle connection failure
+if [[ "$CONNECTION_FAILED" == "true" ]]; then
+  echo ""
+  echo "Error: Connection failed - $FAILURE_REASON"
+  cleanup_failed_connection
+
+  echo ""
+  read -r -p "Retry connection to $SERVER_DISPLAY? [Y/n] " retry_response
+  if [[ "$retry_response" =~ ^[Nn]$ ]]; then
+    # User doesn't want to retry - offer to reconnect to previous server
+    if [[ -n "$LAST_SERVER" ]]; then
+      echo ""
+      read -r -p "Reconnect to previous server ($LAST_SERVER)? [Y/n] " reconnect_response
+      if [[ ! "$reconnect_response" =~ ^[Nn]$ ]]; then
+        exec "$0" "$LAST_SERVER"
       fi
     fi
+    notify "Connection to $SERVER_DISPLAY failed."
+    exit 1
+  else
+    # User wants to retry - re-run this script
+    echo ""
+    info "Retrying connection..."
+    exec "$0" "$SERVER_NAME"
+  fi
+fi
+
+# Check IPv6 leak protection
+load_config "$USER_CONFIG_FILE"
+if [[ "${DISABLE_IPV6:-true}" == "true" ]]; then
+  # Test for IPv6 connectivity (should fail if properly disabled)
+  PUBLIC_IPV6=$(curl -6 -s --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null)
+  if [[ -n "$PUBLIC_IPV6" ]]; then
+    warn "⚠️  IPv6 leak detected: $PUBLIC_IPV6"
+    warn "Your IPv6 address may be exposed. Consider disabling IPv6 systemwide."
+  else
+    info "✓ IPv6 properly disabled/blocked"
   fi
 else
-  warn "Connection established but no internet access detected"
-  warn "This may indicate a routing or DNS issue"
+  # IPv6 enabled - check if it goes through VPN
+  PUBLIC_IPV6=$(curl -6 -s --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null)
+  if [[ -n "$PUBLIC_IPV6" ]]; then
+    info "Public IPv6: $PUBLIC_IPV6"
+  fi
+fi
+
+# Quick DNS leak check
+if command -v resolvectl &>/dev/null; then
+  ACTIVE_DNS=$(resolvectl status "$CONN_NAME" 2>/dev/null | grep "DNS Servers" | awk '{print $3}')
+  if [[ -n "$ACTIVE_DNS" ]]; then
+    if [[ "$ACTIVE_DNS" == "$DNS" ]]; then
+      info "✓ DNS: $ACTIVE_DNS (via VPN)"
+    else
+      warn "⚠️  DNS mismatch - Expected: $DNS, Active: $ACTIVE_DNS"
+    fi
+  fi
+fi
+
+# All verification passed - update config and show success
+echo ""
+info "Successfully connected to $SERVER_DISPLAY"
+
+# Update last connected server in config (atomic)
+if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_FILE"; then
+  warn "Connected successfully but failed to save server name to config"
+  warn "Autoconnect 'last_used' mode may not work correctly"
 fi
