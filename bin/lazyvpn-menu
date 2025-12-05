@@ -2,7 +2,7 @@
 
 # LazyVPN Menu - integrated with Omarchy
 
-export PATH="$HOME/.local/share/omarchy/bin:$PATH"
+export PATH="$HOME/.local/share/lazyvpn/bin:$HOME/.local/share/omarchy/bin:$PATH"
 
 # Source common functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
