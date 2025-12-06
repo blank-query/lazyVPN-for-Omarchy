@@ -152,7 +152,7 @@ You can change this choice by uninstalling and reinstalling (server configs are 
     -   Background daemon monitors VPN connection health (30-second interval)
     -   3-strike failure threshold before triggering reconnection
     -   Attempts 3 reconnections to same server
-    -   **Auto-failover**: After 3 failed reconnects, switches to next-fastest server
+    -   **Auto-failover** (optional): After 3 failed reconnects, switches to next-fastest server (disabled by default, toggle in Options menu)
     -   Logs to `~/.config/lazyvpn/auto-recover.log` with rotation (max 1000 lines)
 
 -   **🔒 IPv6 Leak Protection**: Actively checks for and prevents IPv6 leaks (enabled by default, toggleable)
@@ -357,6 +357,8 @@ Shows state: `🟢 ENABLED` or `🔴 DISABLED`
 - **➖ Remove Server** → Remove servers with cleanup
 - **🔁 Auto-Recover** → Toggle auto-reconnect daemon
   - Status: `🟢 Active` or `🔴 Inactive`
+- **🔀 Auto-Failover** → Toggle automatic failover to fastest server after 3 failed reconnect attempts
+  - Status: `🟢 Enabled` or `🔴 Disabled` (default: disabled)
 - **🔒 IPv6 Protection** → Toggle IPv6 leak protection
   - Status: `🟢 Enabled` or `🔴 Disabled`
 - **✏️ Rename Interface** → Change network interface name
