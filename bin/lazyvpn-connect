@@ -160,6 +160,9 @@ EOF
 info "Restarting systemd-networkd..."
 sudo systemctl restart systemd-networkd
 
+# Wait for systemd-networkd to fully initialize and read config files
+sleep 1
+
 # Bring up the interface
 info "Connecting to $SERVER_DISPLAY..."
 if ! sudo networkctl up "$CONN_NAME"; then
