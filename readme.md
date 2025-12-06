@@ -1,472 +1,474 @@
 # LazyVPN
 
-**LazyVPN** is a powerful, script-based utility for managing WireGuard® VPN connections, meticulously crafted for the Omarchy Linux environment. It replaces manual `wg-quick` and `systemd-networkd` configuration with a fast, keyboard-driven TUI, providing a comprehensive suite of tools for power users.
+**LazyVPN** is a powerful, script-based utility for managing WireGuard® VPN connections, built for Omarchy Linux. It replaces manual `systemd-networkd` configuration with a fast, keyboard-driven TUI.
 
 ## Table of Contents
 
-- [Core Philosophy](#core-philosophy)
-- [Screenshots](#screenshots)
-- [Feature Matrix](#feature-matrix)
-  - [Connection Management](#-connection-management)
-  - [Security & Privacy](#-security--privacy)
-  - [Automation & Configuration](#-automation--configuration)
-  - [Performance & Testing](#-performance--testing)
-  - [System Integration](#-system-integration)
+- [Quick Start](#quick-start)
 - [Requirements](#requirements)
 - [Installation](#installation)
-- [First-Time Setup](#first-time-setup)
-- [Standardized Server Naming](#standardized-server-naming)
-- [Usage](#usage)
-- [Menu Structure](#menu-structure)
+- [Screenshots](#screenshots)
+- [Features](#features)
+  - [Connection Management](#-connection-management)
+  - [Security & Privacy](#-security--privacy)
+  - [Automation](#-automation)
+  - [Performance Testing](#-performance-testing)
+  - [System Integration](#-system-integration)
+- [Server Naming & Features](#server-naming--features)
+- [Usage & Menu Structure](#usage--menu-structure)
+- [Technical Details](#technical-details)
 - [Uninstallation](#uninstallation)
+- [Troubleshooting](#troubleshooting)
 - [Roadmap](#roadmap)
 - [License](#license)
 
 ---
 
-## Core Philosophy
+## Quick Start
 
--   **Speed & Efficiency**: Every action is a few keystrokes away. No mouse required.
--   **Control**: Granular control over your connection, security, and automation.
--   **Intelligence**: The system is smart. It detects providers, parses server names, and automatically handles complex tasks.
--   **Resilience**: With features like connection verification, auto-recover daemon, retry logic, and atomic configuration saves, LazyVPN is built to be reliable.
--   **Transparency**: Understand your connection with detailed status info, IP verification, performance tests, and leak protection.
+```bash
+git clone https://github.com/blank-query/lazyVPN-for-Omarchy.git
+cd lazyVPN-for-Omarchy
+./install_lazyVPN.sh
+```
 
----
-
-## Screenshots
-
-### Main Menu
-![LazyVPN Main Menu](images/01-main-menu.png)
-*The main menu when disconnected, showing all available options*
-
-### Server Selection with Feature Indicators
-![Server Selection](images/03-server-selection.png)
-*Interactive server picker with country flags, feature emojis, and real-time filtering*
-
-### Connection Modes
-![Connection Modes](images/02-connection-modes.png)
-*Choose how to connect: lowest latency, random, specific server, or last used*
-
-### Connecting to a Server
-![Connection Process](images/04-connecting.png)
-*Real-time connection status with IP verification and DNS leak protection*
-
-### Latency Testing
-![Latency Test Results](images/10-latency-test-results.png)
-*Parallel latency testing across all servers with sorted results*
-
-### Advanced Configuration
-
-<details>
-<summary>Click to see more screenshots</summary>
-
-#### Killswitch Settings
-![Killswitch Settings](images/06-killswitch-settings.png)
-*Firewall killswitch with local network access and disconnect behavior options*
-
-#### Autoconnect Settings
-![Autoconnect Settings](images/07-autoconnect-settings.png)
-*Configure automatic connection on boot with multiple mode options*
-
-#### Options Menu
-![Options Menu](images/08-options-menu.png)
-*Server management, auto-recover daemon, IPv6 protection, and more*
-
-#### Adding Servers
-![Add Servers](images/09-add-servers.png)
-*Smart server import with automatic validation, provider detection, and duplicate prevention*
-
-#### Testing Menu
-![Tests Menu](images/05-tests-menu.png)
-*Comprehensive testing suite including latency, speed, DNS leak tests, and performance history*
-
-</details>
-
----
-
-## Feature Matrix
-
-### 🔄 Connection Management
-
--   **Multiple Connection Modes**:
-    -   **⚡ Lowest Latency**: Automatically performs parallel latency tests against all servers and connects to the one with the lowest ping.
-    -   **🎲 Random Server**: Connect to a randomly selected server for effortless privacy.
-    -   **🌍 Choose Server**: Select a server from a filterable, `fzf`-powered list with a detailed preview panel.
-    -   **🔄 Last Used Server**: Instantly reconnect to your most recent server.
--   **Connection Verification**:
-    -   **IP Verification**: Every connection and disconnection is verified by comparing public IP addresses before and after the operation.
-    -   **Automatic Failure Detection**: If traffic is not routing through the VPN, the connection is automatically detected as failed.
-    -   **Intelligent Retry Logic**: On connection failure, you're prompted to retry or reconnect to your previous server.
-    -   **Clean Failure Handling**: Failed connections are automatically cleaned up - no ghost interfaces or incorrect menu status.
-    -   **Killswitch-Aware**: Verification logic adapts based on whether the killswitch is active or not.
--   **Smart Server Display**:
-    -   **Automatic Server Renaming**: When adding servers, LazyVPN automatically renames them to a standardized format using provider detection, filename parsing, and IP geolocation as fallback.
-    -   **Pretty Names**: Displays servers with full location names and country flags (e.g., `🇺🇸 United States - New York (123) • ProtonVPN`).
-    -   **Feature Emojis**: Visual indicators show server capabilities at a glance: 🔄 P2P/Torrenting, 🔒 Secure Core, 🧅 Tor, 🤡 Free Tier, 🚀 VPN Accelerator, 🗡️ NetShield Level 1, ⚔️ NetShield Level 2, 🎮 Moderate NAT.
-    -   **Provider Detection**: Intelligently detects VPN providers (ProtonVPN, Mullvad, IVPN, PIA, NordVPN, Surfshark, etc.) from endpoint, DNS, or config file contents.
--   **Connection Status**: The menu bar always shows your real-time, verified status (`🟢 CONNECTED` or `🔴 DISCONNECTED`) and the currently connected server.
--   **Seamless Server Switching**: Switches between servers gracefully, automatically updating firewall rules and routes with full verification.
-
-### 🛡️ Security & Privacy
-
--   **Advanced Firewall Killswitch**:
-    -   An `iptables`-based killswitch that blocks all internet traffic if the VPN disconnects, preventing any data leaks.
-    -   **Dynamic Updates**: The killswitch is smart. It automatically allows traffic to the new VPN endpoint *before* connecting, ensuring seamless server switching without ever disabling the killswitch.
-    -   **Configurable Local Network Access**: Toggle whether to allow access to local network devices (printers, NAS, etc.) while the killswitch is active.
-    -   **Configurable Disconnect Behavior**: Choose what happens when you manually disconnect:
-        -   `🟢 AUTO`: Automatically disable the killswitch.
-        -   `🟡 PROMPT`: Ask whether to disable the killswitch.
-        -   `🔴 NEVER`: Keep the killswitch active, ensuring the internet remains blocked until you reconnect.
--   **🔁 Auto-Recover Daemon**:
-    -   A background daemon constantly monitors the health of your VPN connection.
-    -   If it detects a drop or stall, it will automatically attempt to reconnect to the same server.
-    -   Toggle from `⚙️ Options` → `🔁 Auto-Recover`.
--   **🔒 IPv6 Leak Protection**:
-    -   Actively checks for and prevents IPv6 leaks by default.
-    -   Can be toggled from the menu if you need to use IPv6.
--   **🧪 DNS Leak Test**:
-    -   A built-in test to verify that your DNS queries are being correctly routed through the VPN's DNS servers, not your ISP's.
--   **🗑️ Secure Deletion**:
-    -   **During Normal Usage**:
-        -   When adding servers: Optional prompt to securely delete original `.conf` files from Downloads (after successful import)
-        -   When removing servers: Automatically shreds server config and its performance history
-    -   **During Uninstall**:
-        -   Performance history logs (usage metadata) - always shredded
-        -   LazyVPN config files - always shredded
-        -   Server configs (private keys) - shredded if user chooses to delete them
-        -   systemd-networkd files (private keys) - always shredded
-        -   System journal logs - optional surgical removal (only files containing VPN logs, preserves clean journals)
-        -   Shell history - automatically cleaned of all VPN-related commands (bash, zsh, fish)
-    -   All secure deletion uses `shred` with 3-pass overwrite to prevent forensic recovery
--   **📁 Configuration Storage**:
-    -   Server configurations are currently stored in plaintext in `~/.config/lazyvpn/wireguard/`
-    -   **Note**: Encrypted storage is a planned optional feature (see [Roadmap](#roadmap))
-
-### ⚙️ Automation & Configuration
-
--   **🔌 Autoconnect on Boot**:
-    -   Set LazyVPN to automatically connect when you log in.
-    -   **Multiple Autoconnect Modes**:
-        -   Connect to the `last used` server.
-        -   Connect to the `lowest latency` server.
-        -   Connect to a `random` server.
-        -   Connect to a `specific` server of your choice.
--   **➕ Easy Server Management**:
-    -   **Add Servers**: A guided `fzf` interface to import `.conf` files from `~/Downloads` with:
-        -   Automatic validation (before and after import)
-        -   Provider detection and location detection (via IP geolocation if needed)
-        -   Standardized renaming and duplicate prevention
-        -   Optional cleanup prompt to securely delete original files from Downloads after successful import (uses `shred` to overwrite before deletion)
-    -   **Remove Servers**: Securely delete servers (configs shredded, not just deleted) with automatic cleanup of performance history and configuration references.
-    -   Both accessible from `⚙️ Options` submenu.
--   **✏️ Interface Renaming**: Easily rename the network interface (e.g., from `wg0` to `lazyvpn`) directly from the menu.
--   **Robust Configuration**:
-    -   Uses atomic file writes to prevent configuration corruption.
-    -   **Interactive Recovery**: If the config file is ever deleted or corrupted, LazyVPN will guide you through an interactive prompt to recreate it.
-    -   **Automatic Migration**: Handles upgrades and configuration changes from older versions seamlessly.
-
-### 📊 Performance & Testing
-
--   **⏱️ Latency Testing**:
-    -   Test the latency of the currently connected server.
-    -   **Test All Servers**: Run parallel latency tests on all servers to find the quickest.
--   **💨 Speed Testing**:
-    -   Run a download speed test on the currently connected server.
-    -   **Test All Servers**: A comprehensive test that connects to *each server one-by-one*, runs a speed test, and presents a sorted list of the fastest servers.
-    -   Both "Test All" features include an option to test your direct, non-VPN connection for comparison.
-    -   Non-VPN results are recorded in performance history as `🌐 Direct (Non-VPN)`.
--   **📈 Performance History**:
-    -   Automatically records the results of every latency and speed test.
-    -   View a summary of average speeds and latencies for all servers.
-    -   View a detailed log of the last 20 tests for any specific server.
-
-### ✨ System Integration
-
--   **Omarchy Menu**: Adds a "LazyVPN" entry to the main Omarchy menu (`SUPER+ALT+SPACE`).
--   **Dedicated Keybinding**: Launch the menu instantly with `SUPER+L` (automatically registered in the Omarchy keybind help menu at `SUPER+K`).
--   **Passwordless Operation (Optional)**: During installation, you can choose to enable passwordless sudo for specific VPN-related commands only (`networkctl`, `ip route`, `iptables`, systemd-networkd operations). If disabled, you'll be prompted for password when connecting/disconnecting.
--   **Desktop Notifications**: Provides clear notifications for connects, disconnects, and other key events.
--   **Smart Change Detection**: Automatically detects when you add or remove `.conf` files and notifies you.
+1. Press `SUPER+L` to open LazyVPN menu
+2. Select `➕ Add New Server` to import `.conf` files from `~/Downloads`
+3. Choose `⚡ Lowest Latency` to auto-connect to fastest server
+4. Your connection is verified with IP checks and DNS leak testing
 
 ---
 
 ## Requirements
 
--   **Omarchy Linux** (Arch-based distribution)
--   **systemd-networkd** (enabled and running)
--   **systemd-resolved** (enabled and running)
--   **wireguard-tools** or WireGuard kernel module
--   **curl** (for speed tests and public IP detection)
--   **bc** (for latency/speed calculations)
--   **iptables** (for killswitch functionality)
--   **bind-tools** (provides `dig` for DNS leak testing)
--   **fzf** (provided by Omarchy)
--   **omarchy-launch-walker** (Omarchy menu system)
--   **omarchy-launch-floating-terminal-with-presentation** (Omarchy terminal launcher)
--   **omarchy-notification-dismiss** (Omarchy notification system)
+-   **Omarchy Linux** (this tool is built specifically for Omarchy and will not work on other distributions)
+-	VPN provider that supports wireguard connections
 
-**Note**: The installer automatically installs missing dependencies (except Omarchy itself).
+**Dependencies** (auto-installed by installer):
+-   `curl` - Speed tests and public IP detection
+-   `bc` - Latency/speed calculations
+-   `iptables` - Killswitch functionality
+-   `bind-tools` - DNS leak testing (`dig`)
 
 ---
 
 ## Installation
 
-1.  **Clone the Repository**:
-    ```bash
-    git clone https://github.com/blank-query/lazyVPN-for-Omarchy.git
-    cd lazyVPN-for-Omarchy
-    ```
-
-2.  **Run the Installer**:
-    ```bash
-    ./install_lazyVPN.sh
-    ```
-    The installer handles everything: dependencies, script installation, `sudo` rights, and desktop integration.
-
-    During installation, you'll be asked whether to enable **passwordless sudo** for VPN operations:
-    - **Yes (default)**: Allows specific VPN-related commands (`networkctl`, `ip route`, `iptables`, systemd-networkd) to run without password prompts
-    - **No**: You'll be prompted for password during VPN operations (more secure for shared systems)
-
-    Note: This only permits the specific commands needed for VPN management, not blanket sudo access.
-
-    You can change this choice anytime by uninstalling and reinstalling (your server configs are preserved).
-
-## First-Time Setup
-
-1.  **Get WireGuard Files**: Download `.conf` files from your VPN provider.
-2.  **Add Servers**: Run LazyVPN (`SUPER+L`) and choose `➕ Add New Server` to import them from your `~/Downloads` folder.
-    -   LazyVPN automatically validates, detects providers, determines locations (using IP geolocation if needed), and renames files to a standardized format.
-    -   Duplicate detection prevents adding servers to the same location twice.
-    -   You'll see both the original filename and the new standardized name during import.
-
-## Standardized Server Naming
-
-### Why Automatic Renaming?
-
-VPN providers often give configuration files inconsistent or generic names like `wg-US-FREE-27.conf`, `SE-31-TOR.conf`, or `server-uk-123.conf`. LazyVPN automatically renames these to a standardized, machine-readable format when you import them. This provides several key benefits:
-
--   **Consistent Organization**: All servers follow the same naming pattern regardless of provider
--   **Fast Display**: Location codes (like `US-WA`) are expanded locally to full names (`United States - Washington`) without network calls
--   **Smart Filtering**: Easy to search and filter by country, state, city, or provider in the server picker
--   **Duplicate Detection**: Prevents adding multiple servers to the same location
--   **Feature Encoding**: Server capabilities are preserved in the filename for quick identification
--   **Automatic Location Detection**: Uses IP geolocation as fallback when filenames don't contain location info
-
-### Naming Format
-
-```
-[Provider-]Country[-State][-City][-Features]#Number
+```bash
+git clone https://github.com/blank-query/lazyVPN-for-Omarchy.git
+cd lazyVPN-for-Omarchy
+./install_lazyVPN.sh
 ```
 
-### Examples
+During installation, you'll be asked whether to enable **passwordless sudo** for VPN operations:
+- **Yes (default)**: Specific VPN commands (`networkctl`, `ip route`, `iptables`, systemd-networkd) run without password prompts
+- **No**: Password required for VPN operations (more secure for shared systems)
 
+You can change this choice by uninstalling and reinstalling (server configs are preserved).
+
+---
+
+## Screenshots
+
+### Main Menu & Connection
+![Main Menu](images/01-main-menu.png)
+*Main menu when disconnected*
+
+![Connection Modes](images/02-connection-modes.png)
+*Connection modes: lowest latency, random, choose, or last used*
+
+![Server Selection](images/03-server-selection.png)
+*Server picker with country flags, feature emojis, and real-time filtering*
+
+![Connecting](images/04-connecting.png)
+*Connection verification with IP and DNS leak checks*
+
+### Testing & Configuration
+
+<details>
+<summary>Click to see more screenshots</summary>
+
+![Tests Menu](images/05-tests-menu.png)
+*Testing suite: latency, speed, DNS leak tests, and performance history*
+
+![Killswitch Settings](images/06-killswitch-settings.png)
+*Killswitch with local network access and disconnect behavior*
+
+![Autoconnect Settings](images/07-autoconnect-settings.png)
+*Autoconnect on boot with multiple mode options*
+
+![Options Menu](images/08-options-menu.png)
+*Server management, auto-recover daemon, IPv6 protection*
+
+![Add Servers](images/09-add-servers.png)
+*Smart server import with validation and duplicate prevention*
+
+![Latency Test](images/10-latency-test-results.png)
+*Parallel latency testing across all servers*
+
+</details>
+
+---
+
+## Features
+
+### 🔄 Connection Management
+
+-   **Multiple Connection Modes**:
+    -   **⚡ Lowest Latency**: Parallel latency tests across all servers, connects to fastest
+    -   **🎲 Random Server**: Connect to randomly selected server
+    -   **🌍 Choose Server**: Filterable `fzf` list with preview panel
+    -   **🔄 Last Used**: Reconnect to most recent server
+
+-   **Connection Verification**:
+    -   IP verification before and after connection
+    -   Automatic failure detection if traffic not routing through VPN
+    -   Intelligent retry logic with prompts to retry or return to previous server
+    -   Automatic cleanup of failed connections (no ghost interfaces)
+    -   Killswitch-aware verification logic
+
+-   **Seamless Server Switching**: Change servers without disconnecting - firewall rules and routes update automatically before connecting to new server
+
+-   **Smart Display**:
+    -   Server auto-renaming to standardized format using provider detection, filename parsing, and IP geolocation
+    -   Pretty names with full locations and flags: `🇺🇸 United States - New York (123) • ProtonVPN`
+    -   Feature emojis show capabilities at a glance: 🔄 P2P, 🔒 Secure Core, 🧅 Tor, 🚀 Accelerator, etc.
+    -   Provider detection: ProtonVPN, Mullvad, IVPN, PIA, NordVPN, Surfshark, and others
+
+-   **Real-time Status**: Menu bar shows verified connection state and current server
+
+### 🛡️ Security & Privacy
+
+-   **Firewall Killswitch**:
+    -   iptables-based killswitch blocks all traffic if VPN disconnects
+    -   **Dynamic updates**: Automatically allows traffic to new VPN endpoint *before* connecting (seamless server switching)
+    -   **Configurable local network access**: Toggle LAN device access (printers, NAS) while killswitch active
+    -   **Disconnect behavior**: Three modes:
+        -   `🟢 AUTO`: Automatically disable killswitch on disconnect
+        -   `🟡 PROMPT`: Ask whether to disable
+        -   `🔴 NEVER`: Keep killswitch active (internet blocked until reconnect)
+
+-   **🔁 Auto-Recover Daemon**:
+    -   Background daemon monitors VPN connection health (30-second interval)
+    -   3-strike failure threshold before triggering reconnection
+    -   Attempts 3 reconnections to same server
+    -   **Auto-failover**: After 3 failed reconnects, switches to next-fastest server
+    -   Logs to `~/.config/lazyvpn/auto-recover.log` with rotation (max 1000 lines)
+
+-   **🔒 IPv6 Leak Protection**: Actively checks for and prevents IPv6 leaks (enabled by default, toggleable)
+
+-   **🧪 DNS Leak Test**: Verifies DNS queries route through VPN's DNS servers, not your ISP's
+
+-   **🗑️ Secure Deletion**:
+    -   **During usage**:
+        -   Adding servers: Optional secure deletion of original `.conf` files from Downloads
+        -   Removing servers: Automatic shredding of configs and performance history
+    -   **During uninstall**:
+        -   Performance logs, configs, systemd-networkd files: Always shredded (3-pass)
+        -   Server configs (private keys): User choice
+        -   System journal logs: Optional surgical removal (only VPN-related logs)
+        -   Shell history: Automatic cleanup of VPN commands (bash, zsh, fish)
+
+-   **🔐 Security Hardening**:
+    -   Input validation prevents path traversal and injection attacks
+    -   Symlink detection in all file operations
+    -   Secure file helper isolates privileged operations
+    -   Atomic configuration updates prevent corruption
+    -   Regex metacharacter validation for connection names
+
+-   **📁 Configuration Storage**: Server configs stored in `~/.config/lazyvpn/wireguard/` (encrypted storage planned - see [Roadmap](#roadmap))
+
+### ⚙️ Automation
+
+-   **🔌 Autoconnect on Boot**:
+    -   Four modes: `last used`, `lowest latency`, `random`, or `specific server`
+    -   Waits up to 30 seconds for network connectivity before connecting
+    -   Fallback to random if last-used server unavailable
+
+-   **➕ Server Management**:
+    -   **Add servers**: Guided `fzf` interface with:
+        -   Automatic validation before and after import
+        -   Provider and location detection (IP geolocation fallback)
+        -   Standardized renaming and duplicate prevention
+        -   Optional secure deletion of original files
+    -   **Remove servers**: Secure deletion (shredded, not just deleted) with cleanup of performance history
+
+-   **✏️ Interface Renaming**: Change network interface name (e.g., `wg0` → `lazyvpn`)
+
+-   **Robust Configuration**:
+    -   Atomic file writes prevent corruption
+    -   Interactive recovery for deleted/corrupted configs
+    -   **Automatic migration** from older versions:
+        -   Renames deprecated settings
+        -   Adds missing configuration keys
+        -   Migrates daemon PID and log files
+
+-   **Change Detection**: Automatically detects external `.conf` file additions/removals and notifies you
+
+### 📊 Performance Testing
+
+-   **⏱️ Latency Testing**:
+    -   Test single server or all servers in parallel
+    -   Optional non-VPN baseline comparison
+    -   Results automatically recorded
+
+-   **💨 Speed Testing**:
+    -   Download speed test on current server (10MB test file)
+    -   **Test all servers**: Sequential connection and speed test for comprehensive ranking
+    -   Optional non-VPN baseline test
+    -   Prevents usage while killswitch active (would block switching)
+
+-   **📈 Performance History**:
+    -   Automatic recording of all test results
+    -   Summary view: Average speeds/latencies and test counts for all servers
+    -   Detailed view: Last 20 tests for specific server with timestamps
+    -   Tracks non-VPN results as `🌐 Direct (Non-VPN)` for comparison
+    -   Automatic log rotation (max 100 entries per server)
+
+### ✨ System Integration
+
+-   **Omarchy Menu**: Adds LazyVPN entry to main Omarchy menu (`SUPER+ALT+SPACE`)
+-   **Dedicated Keybinding**: `SUPER+L` (registered in Omarchy keybind help at `SUPER+K`)
+-   **Desktop Notifications**: Clear notifications for all key events
+-   **Passwordless Operation (Optional)**: Specific VPN commands only (not blanket sudo access)
+
+---
+
+## Server Naming & Features
+
+### Automatic Server Renaming
+
+VPN providers give configs inconsistent names like `wg-US-FREE-27.conf`, `SE-31-TOR.conf`, or `server-uk-123.conf`. LazyVPN automatically renames these to a standardized format when importing:
+
+**Format**: `[Provider-]Country[-State][-City][-Features]#Number`
+
+**Examples**:
 -   `Proton-US-NY#123` → 🇺🇸 United States - New York (123) • ProtonVPN
 -   `Mullvad-SE-Stockholm#5` → 🇸🇪 Sweden - Stockholm (5) • Mullvad
 -   `IVPN-NL-Amsterdam-P2P#3` → 🇳🇱 Netherlands - Amsterdam (3) 🔄 • IVPN
 -   `PIA-US-CA-LosAngeles#7` → 🇺🇸 United States - California, Los Angeles (7) • PIA
 -   `Proton-CH-Tor#2` → 🇨🇭 Switzerland (2) 🧅 • ProtonVPN
--   `Nord-GB-London-Stream#12` → 🇬🇧 United Kingdom - London (12) 📺 • NordVPN
 
-### How It Works
+**How it works**:
+1. Provider detection from DNS, endpoint, or config contents
+2. Location parsing from filename
+3. Server IP geolocation fallback if filename parsing fails (ip-api.com, rate limited to 45 requests/min)
+4. Feature detection (P2P, Tor, Secure Core, etc.) developed using the proton conf file conventions
+5. Auto-numbering for servers in same location
 
-1.  **Provider Detection**: Identifies your VPN provider from DNS, endpoint, or config contents
-2.  **Location Parsing**: Attempts to extract location from the original filename
-3.  **IP Geolocation Fallback**: If filename parsing fails, looks up the endpoint IP to determine country, state/region, and city
-4.  **Feature Detection**: Identifies server capabilities (P2P, Tor, Secure Core, Streaming) from filename and config
-5.  **Auto-Numbering**: Assigns the next available number for servers in the same location
-6.  **Standardized Naming**: Saves the file with the new name and displays it with full location names and emoji indicators
+### Feature Detection & Emojis
 
-You never need to manually rename files — LazyVPN handles it all automatically!
+LazyVPN automatically detects server features from WireGuard configs and displays them with emoji indicators:
 
-## Server Feature Emojis
+| Emoji | Feature | Detection Source |
+|-------|---------|------------------|
+| 🔄 | **P2P / Torrenting** | `# NAT-PMP (Port Forwarding) = on` in config |
+| 🔒 | **Secure Core** (multi-hop) | Peer comment pattern: `CH/IS/SE-[EXIT_COUNTRY]#N` |
+| 🧅 | **Tor Routing** | Peer comment contains `-TOR` |
+| 🤡 | **Free Tier** | Peer comment contains `FREE` |
+| 🚀 | **VPN Accelerator** | `# VPN Accelerator = on` in config |
+| 🗡️ | **NetShield Level 1** (malware blocking) | `# NetShield = 1` in config |
+| ⚔️ | **NetShield Level 2** (ads+malware blocking) | `# NetShield = 2` in config |
+| 🎮 | **Moderate NAT** (gaming optimized) | `# Moderate NAT = on` in config |
 
-LazyVPN automatically detects and displays server features using visual emoji indicators. These emojis appear next to server names throughout the interface, allowing you to quickly identify server capabilities at a glance.
-
-### Feature Detection
-
-All features are automatically detected from WireGuard configuration files when servers are added. No manual configuration required!
-
-| Emoji | Feature | What It Means | Detection Source |
-|-------|---------|---------------|------------------|
-| 🔄 | **P2P / Torrenting** | Port forwarding enabled for peer-to-peer file sharing and torrenting | `# NAT-PMP (Port Forwarding) = on` in config |
-| 🔒 | **Secure Core** | Multi-hop VPN routing through privacy-friendly countries (CH/IS/SE) for enhanced security | Peer comment pattern: `CH/IS/SE-[EXIT_COUNTRY]#N` |
-| 🧅 | **Tor Routing** | Routes traffic through Tor network for maximum anonymity | Peer comment contains `-TOR` |
-| 🤡 | **Free Tier** | Free plan server (limited features) | Peer comment contains `FREE` |
-| 🚀 | **VPN Accelerator** | ProtonVPN's speed enhancement technology (up to 400% faster) | `# VPN Accelerator = on` in config |
-| 🗡️ | **NetShield Level 1** | Malware blocking only | `# NetShield = 1` in config |
-| ⚔️ | **NetShield Level 2** | Malware + ad/tracker blocking (full protection) | `# NetShield = 2` in config |
-| 🎮 | **Moderate NAT** | Optimized for gaming and P2P with reduced IP randomization | `# Moderate NAT = on` in config |
-
-### Example Server Displays
-
+**Example displays**:
 ```
 🇸🇪 Sweden - Alberta, Roslagen (1) 🔄🔒🚀 • ProtonVPN
-    └─ Has: P2P support, Secure Core multi-hop, VPN Accelerator
+    └─ P2P support, Secure Core multi-hop, VPN Accelerator
 
 🇺🇸 United States - Washington, Seattle (27) 🔄🤡🗡️ • ProtonVPN
-    └─ Has: P2P support, Free tier, NetShield Level 1
+    └─ P2P support, Free tier, NetShield Level 1
 
 🇸🇪 Sweden - Alberta, Stockholm (31) 🔄🧅🗡️ • ProtonVPN
-    └─ Has: P2P support, Tor routing, NetShield Level 1
-
-🇦🇱 Albania - Tirana (52) ⚔️🎮 • ProtonVPN
-    └─ Has: NetShield Level 2 (full ad blocking), Moderate NAT (gaming)
+    └─ P2P support, Tor routing, NetShield Level 1
 ```
 
-### Provider-Specific Features
+**Note**: Feature detection optimized for ProtonVPN configs. Support for other providers may be added in future updates.
 
-Currently, all feature detection is optimized for **ProtonVPN** configuration formats. Support for other providers' feature detection may be added in future updates.
+**Secure Core**: Entry countries are always privacy-friendly jurisdictions (Switzerland 🇨🇭, Iceland 🇮🇸, or Sweden 🇸🇪) that route to your chosen exit country.
 
-**Secure Core Multi-Hop**: Entry countries are always privacy-friendly jurisdictions (Switzerland 🇨🇭, Iceland 🇮🇸, or Sweden 🇸🇪) that route to your chosen exit country.
+---
 
-## Usage
+## Usage & Menu Structure
 
--   **Open the Menu**: Press `SUPER+L`.
--   **Navigate**: Use arrow keys and `Enter`. `Esc` to go back or exit.
--   **In fzf pickers**: Use `Ctrl+A` to select/deselect all when adding or removing servers.
--   **Server filtering**: In the "Choose Server" picker, type to filter by country, city, or provider.
--   All features are accessible through the menu.
-
-## Menu Structure
-
-LazyVPN's menu is organized hierarchically with dynamic options that change based on your connection state.
+**Open Menu**: `SUPER+L`
+**Navigate**: Arrow keys and Enter. Esc to go back or exit.
+**In fzf pickers**: `Ctrl+A` to select/deselect all when adding or removing servers. Type to filter.
 
 ### Main Menu
 
 #### When Disconnected:
-- **🔌 Connect** → Connection submenu (choose how to connect)
-- **🛡️ Killswitch** → Killswitch configuration submenu
-- **⚙️ Autostart** → Autostart configuration submenu
+- **🔌 Connect** → Connection submenu
+- **🛡️ Killswitch** → Killswitch configuration
+- **⚙️ Autostart** → Autostart configuration
 - **🧪 Tests** → Testing submenu
-- **⚙️ Options** → Options submenu (server management, advanced settings)
+- **⚙️ Options** → Server management and settings
 
 #### When Connected:
 - **🟢 Status Bar**: Shows connected server and public IP
-- **🔌 Disconnect** → Disconnects from current VPN
-- **🔄 Switch Server** → Connection submenu (switch to different server)
-- **🛡️ Killswitch** → Killswitch configuration submenu
-- **⚙️ Autostart** → Autostart configuration submenu
+- **🔌 Disconnect** → Disconnect from VPN
+- **🔄 Switch Server** → Connection submenu
+- **🛡️ Killswitch** → Killswitch configuration
+- **⚙️ Autostart** → Autostart configuration
 - **🧪 Tests** → Testing submenu
-- **⚙️ Options** → Options submenu
+- **⚙️ Options** → Server management and settings
 
-### Connection Submenu (🔌 Connect / 🔄 Switch Server)
-- **⚡ Lowest Latency** → Automatically tests all servers and connects to fastest
-- **🎲 Random Server** → Connects to random server
-- **🌍 Choose Server** → `fzf` picker with server preview and filtering
-- **🔄 Last Used Server** → Reconnects to most recently used server
+### Connection Submenu
+- **⚡ Lowest Latency** → Test all servers, connect to fastest
+- **🎲 Random Server** → Connect to random server
+- **🌍 Choose Server** → `fzf` picker with filtering and preview
+- **🔄 Last Used Server** → Reconnect to most recently used
 
-### Killswitch Submenu (🛡️)
-Shows current killswitch state (`🟢 ENABLED` or `🔴 DISABLED`)
-- **Toggle Killswitch** → Enable/disable killswitch
-- **📶 Local Network Access** → Toggle LAN device access when killswitch active
-  - Status indicator: `🟢 Allowed` or `🔴 Blocked`
-- **⚙️ Disconnect Behavior** → Configure what happens when manually disconnecting
+### Killswitch Submenu
+Shows state: `🟢 ENABLED` or `🔴 DISABLED`
+- **Toggle Killswitch** → Enable/disable
+- **📶 Local Network Access** → Toggle LAN access when killswitch active
+  - Status: `🟢 Allowed` or `🔴 Blocked`
+- **⚙️ Disconnect Behavior** → Configure disconnect behavior
   - `🟢 AUTO` - Automatically disable killswitch
   - `🟡 PROMPT` - Ask whether to disable
-  - `🔴 NEVER` - Keep killswitch active (internet blocked until reconnect)
+  - `🔴 NEVER` - Keep active (internet blocked until reconnect)
 
-### Autostart Submenu (⚙️)
-Shows current autostart state (`🟢 ENABLED` or `🔴 DISABLED`)
+### Autostart Submenu
+Shows state: `🟢 ENABLED` or `🔴 DISABLED`
 - **Toggle Autostart** → Enable/disable autoconnect on boot
-- **Autoconnect Mode** → Choose which server to connect to at boot
-  - `⚡ Lowest Latency` - Test all servers and connect to fastest
-  - `🔄 Last Used` - Connect to most recently used server
+- **Autoconnect Mode** → Choose server selection method
+  - `⚡ Lowest Latency` - Test all, connect to fastest
+  - `🔄 Last Used` - Connect to most recent
   - `🎲 Random` - Connect to random server
-  - `🎯 Specific Server` - Connect to a specific chosen server (opens `fzf` picker)
+  - `🎯 Specific Server` - Connect to chosen server (opens picker)
 
-### Tests Submenu (🧪)
+### Tests Submenu
 
-#### When Disconnected:
-- **⏱️ Latency Test (All Servers)** → Parallel ping test of all servers with optional non-VPN comparison
-- **📈 Performance History** → View historical test results and averages
+**When Disconnected**:
+- **⏱️ Latency Test (All Servers)** → Parallel ping test with optional non-VPN comparison
+- **📈 Performance History** → View historical test results
 
-#### When Connected:
-- **⏱️ Latency Test** → Test ping to current server
-- **⏱️ Latency Test (All Servers)** → Parallel ping test of all servers with optional non-VPN comparison
+**When Connected**:
+- **⏱️ Latency Test** → Test current server
+- **⏱️ Latency Test (All Servers)** → Parallel test with optional non-VPN comparison
 - **💨 Speed Test** → Download speed test on current server
-- **💨 Speed Test (All Servers)** → Sequential speed test of all servers with optional non-VPN comparison
-- **🧪 DNS Leak Test** → Verify DNS queries route through VPN, not ISP
-- **📈 Performance History** → View historical test results and averages
+- **💨 Speed Test (All Servers)** → Sequential test of all servers with optional non-VPN comparison
+- **🧪 DNS Leak Test** → Verify DNS routes through VPN
+- **📈 Performance History** → View historical test results
 
-### Options Submenu (⚙️)
-- **➕ Add New Server** → Import `.conf` files from `~/Downloads` with validation and duplicate detection
-- **➖ Remove Server** → Remove installed servers (with safety checks and cleanup)
+### Options Submenu
+- **➕ Add New Server** → Import `.conf` files from `~/Downloads`
+- **➖ Remove Server** → Remove servers with cleanup
 - **🔁 Auto-Recover** → Toggle auto-reconnect daemon
-  - Status indicator: `🟢 Active` or `🔴 Inactive`
+  - Status: `🟢 Active` or `🔴 Inactive`
 - **🔒 IPv6 Protection** → Toggle IPv6 leak protection
-  - Status indicator: `🟢 Enabled` or `🔴 Disabled`
-- **✏️ Rename Interface** → Change network interface name (default: `wg0`)
-  - Shows current name: e.g., `(wg0)`
-- **🗑️ Uninstall LazyVPN** → Complete uninstallation with confirmation
+  - Status: `🟢 Enabled` or `🔴 Disabled`
+- **✏️ Rename Interface** → Change network interface name
+  - Shows current name, e.g., `(wg0)`
+- **🗑️ Uninstall LazyVPN** → Complete uninstallation
 
-### Performance History Details
-When viewing performance history:
-- **Summary View** (no arguments): Shows all servers with average speeds, latencies, and test counts
-- **Detailed View** (with server name): Shows last 20 test results with timestamps
-- **Non-VPN Data**: Direct connection tests appear as `🌐 Direct (Non-VPN)`
+### Performance History
+- **Summary view**: All servers with average speeds, latencies, test counts
+- **Detailed view**: Last 20 test results with timestamps for specific server
+- **Non-VPN data**: Direct connection tests appear as `🌐 Direct (Non-VPN)`
+
+---
+
+## Technical Details
+
+**Network Stack**: Uses `systemd-networkd` for WireGuard interface management (not `wg-quick`)
+**Firewall**: Custom iptables chains (`LAZYVPN_OUT` for IPv4, `LAZYVPN_OUT6` for IPv6)
+**DNS**: Integrates with `systemd-resolved` for DNS privacy
+**Privilege Model**: Minimal sudo scope via `/etc/sudoers.d/lazyvpn` - only specific VPN-related commands
+
+**Security Architecture**:
+- Input validation (path traversal, symlink attacks, injection prevention)
+- Atomic file operations (prevents corruption from concurrent access)
+- Secure file helper (privileged operations isolated in validated wrapper)
+- 3-pass shred for sensitive data deletion
+
+**Performance**:
+- Parallel latency testing across all servers
+- WireGuard kernel module auto-loaded on-demand
+- Atomic server switching (firewall updates before connecting - no traffic leaks)
+
+**Configuration Files**:
+- Server configs: `~/.config/lazyvpn/wireguard/*.conf`
+- Settings: `~/.config/lazyvpn/config`
+- Performance history: `~/.config/lazyvpn/performance/`
+- Auto-recover log: `~/.config/lazyvpn/auto-recover.log`
+- Server list cache: `~/.config/lazyvpn/.server-list-cache`
+
+---
 
 ## Uninstallation
 
-LazyVPN includes a comprehensive uninstaller with privacy-focused secure deletion:
+**Access**:
+-   Run `lazyvpn-uninstall` from terminal
+-   Or: Menu → `⚙️ Options` → `🗑️ Uninstall LazyVPN`
 
--   **Access Methods**:
-    -   Run `lazyvpn-uninstall` from a terminal
-    -   Select `⚙️ Options` → `🗑️ Uninstall LazyVPN` from the menu
+**Features**:
+-   Auto-disconnects if connected (no need to leave the screen)
+-   Automatic cleanup on installation failures
 
--   **Automatic Cleanup**: The installer detects installation failures and automatically runs the uninstaller to clean up partial installations.
+**Secure Deletion** (with confirmation prompts):
+-   **Always deleted** (shredded with 3-pass overwrite):
+    -   Performance history logs (usage metadata)
+    -   LazyVPN config files (settings)
+    -   systemd-networkd files (private keys)
+    -   Shell history (VPN commands removed from bash/zsh/fish)
+-   **User choice**:
+    -   Server configs (private keys)
+    -   System journal logs (surgical removal - only files containing VPN logs)
 
--   **Safe Uninstall**: If connected to a VPN, the uninstaller offers to disconnect for you - no need to leave the screen.
+**Removed**:
+-   All LazyVPN scripts from `~/.local/share/lazyvpn/bin/`
+-   Firewall killswitch rules
+-   Sudoers configuration (`/etc/sudoers.d/lazyvpn`)
+-   Desktop integrations (menu entries, autostart files, keybindings)
+-   Omarchy menu modifications
 
--   **Secure Deletion (Privacy-Focused)**:
-    -   **Always Securely Deleted**:
-        -   Performance history logs (usage metadata) - shredded with 3-pass overwrite
-        -   LazyVPN config files (settings) - shredded
-        -   systemd-networkd files (private keys) - shredded
-        -   Shell history (VPN commands removed from bash/zsh/fish history)
-    -   **User Choice**:
-        -   Server configs (private keys) - you'll be asked if you want to delete them (shredded if yes)
-        -   System journal logs - optional surgical removal (only shreds journal files containing VPN connection logs, preserves clean system logs from other periods)
-    -   All secure deletion uses `shred` to overwrite files before deletion, preventing forensic recovery
+**Privacy Result**: Choosing "yes" to all prompts leaves zero recoverable traces of VPN usage.
 
--   **What Gets Removed**:
-    -   All LazyVPN scripts from `~/.local/share/omarchy/bin/`
-    -   Firewall killswitch rules
-    -   Sudoers configuration
-    -   Desktop integrations (menu entries, autostart files, keybindings)
-    -   Omarchy menu modifications
+---
 
--   **Privacy Result**: When choosing "yes" to all prompts, zero recoverable traces of VPN usage remain on the machine (no private keys, no connection timestamps, no server names, no command history).
+## Troubleshooting
 
-**Note**: The uninstaller is installed first during installation to ensure cleanup capability even if installation fails.
+**Killswitch blocks all traffic**
+- Check killswitch configuration in menu
+- **Disable temporarily**: `lazyvpn-disable-killswitch` from terminal
+- Verify disconnect behavior setting isn't set to NEVER
+
+**Can't access local network (printer, NAS) while connected**
+- **Enable**: Menu → `🛡️ Killswitch` → `📶 Local Network Access` → `🟢 Allowed`
+
+**Speed test fails or returns zero**
+- Check internet connectivity
+- Verify VPN connection is active
+- Some servers may have restrictive firewall rules
+
+**Auto-recover daemon not working**
+- Check status: Menu → `⚙️ Options` → `🔁 Auto-Recover`
+- View logs: `cat ~/.config/lazyvpn/auto-recover.log`
+- Verify daemon running: `pgrep -f lazyvpn-auto-recover-daemon`
 
 ---
 
 ## Roadmap
 
-Future features and enhancements under consideration:
+### 🔐 Encrypted Configuration Storage (Planned)
+-   Optional toggle-able encryption for stored `.conf` files
+-   Automatic encryption when storing in `~/.config/lazyvpn/wireguard/`
+-   Transparent decryption when connecting
+-   Password/passphrase protection
 
-### 🔐 Encrypted Configuration Storage (Optional Feature)
--   **Toggle-able Security**: Optional encryption for stored `.conf` files (disabled by default)
--   **Automatic Encryption**: When enabled, encrypt `.conf` files before storing them in `~/.config/lazyvpn/wireguard/`
--   **Secure Deletion**: ✅ *Implemented* - Optional prompt to securely delete original `.conf` files from Downloads after import using `shred`
--   **Transparent Decryption**: Decrypt configs on-the-fly when connecting, completely transparent to the user
--   **Password Protection**: Password/passphrase protection for the encrypted config vault
+### Other Considerations
+-   Support for additional VPN providers' feature detection
 
-### 🔄 Auto-Failover (Partially Implemented)
--   Currently, the auto-recover daemon reconnects to the same server if a connection drops
--   **Planned**: If reconnection fails repeatedly, automatically failover to the next-quickest server to minimize downtime
-
-### Suggestions Welcome!
-Have ideas for LazyVPN? Open an issue on the GitHub repository with your feature requests.
+**Suggestions welcome!** Open an issue on GitHub.
 
 ---
 
 ## License
 
-LazyVPN is released under the [MIT License](LICENSE).
-
-Copyright (c) 2025 blank-query
+MIT License - Copyright (c) 2025 blank-query
 
 ---
+
 *WireGuard is a registered trademark of Jason A. Donenfeld.*
