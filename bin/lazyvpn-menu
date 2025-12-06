@@ -125,15 +125,17 @@ show_options_menu() {
   load_config "$CONFIG_FILE"
 
   auto_recover_state=$([ "${AUTO_RECOVER:-false}" == "true" ] && echo "🟢" || echo "🔴")
+  auto_failover_state=$([ "${AUTO_FAILOVER:-false}" == "true" ] && echo "🟢" || echo "🔴")
   ipv6_protection_state=$([ "${DISABLE_IPV6:-true}" == "true" ] && echo "🟢" || echo "🔴")
   interface_name="${CONNECTION_NAME:-wg0}"
 
-  local options="➕  Add New Server\n➖  Remove Server\n🔁  Auto-Recover $auto_recover_state\n🔒  IPv6 Protection $ipv6_protection_state\n✏️  Rename Interface ($interface_name)\n🗑️  Uninstall LazyVPN"
+  local options="➕  Add New Server\n➖  Remove Server\n🔁  Auto-Recover $auto_recover_state\n🔀  Auto-Failover $auto_failover_state\n🔒  IPv6 Protection $ipv6_protection_state\n✏️  Rename Interface ($interface_name)\n🗑️  Uninstall LazyVPN"
 
   case $(menu "Options" "$options") in
     *Add\ New*) show_add_server_flow ;;
     *Remove\ Server*) show_remove_server_flow ;;
     *Auto-Recover*) "$SCRIPT_DIR/lazyvpn-toggle-auto-recover" >/dev/null 2>&1 && show_options_menu ;;
+    *Auto-Failover*) "$SCRIPT_DIR/lazyvpn-toggle-auto-failover" >/dev/null 2>&1 && show_options_menu ;;
     *IPv6\ Protection*) "$SCRIPT_DIR/lazyvpn-toggle-ipv6-protection" >/dev/null 2>&1 && show_options_menu ;;
     *Rename\ Interface*) omarchy-launch-floating-terminal-with-presentation lazyvpn-rename-connection ;;
     *Uninstall*) show_uninstall_confirm ;;
