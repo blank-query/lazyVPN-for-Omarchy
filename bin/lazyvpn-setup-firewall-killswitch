@@ -49,6 +49,21 @@ iptables -A LAZYVPN_OUT -j RETURN
 ip6tables -A LAZYVPN_OUT -j RETURN
 
 info "✓ Firewall killswitch chains created successfully"
+
+# Save iptables rules to make them persistent across reboots
+if command -v iptables-save &>/dev/null; then
+  iptables-save > /etc/iptables/iptables.rules 2>/dev/null
+  ip6tables-save > /etc/iptables/ip6tables.rules 2>/dev/null
+  info "✓ Iptables rules saved"
+fi
+
+# Enable iptables service to restore rules early at boot (before networking)
+if systemctl list-unit-files | grep -q '^iptables.service'; then
+  if systemctl enable iptables.service 2>&1 | grep -q "Created symlink"; then
+    info "✓ Iptables service enabled for boot persistence"
+  fi
+fi
+
 info ""
 info "To enable killswitch, use: lazyvpn-toggle-killswitch"
 info "To allow local network access, use: lazyvpn-toggle-local-network"

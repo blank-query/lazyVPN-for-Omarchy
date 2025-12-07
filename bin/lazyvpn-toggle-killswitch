@@ -42,6 +42,13 @@ if iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
   fi
 
   info "Killswitch disabled"
+
+  # Save iptables rules to make them persistent across reboots
+  if command -v iptables-save &>/dev/null; then
+    iptables-save > /etc/iptables/iptables.rules
+    ip6tables-save > /etc/iptables/ip6tables.rules
+    info "✓ Iptables rules saved"
+  fi
 else
   # Killswitch is disabled, so enable it
   info "Enabling killswitch..."
@@ -81,5 +88,23 @@ else
     ip6tables -A LAZYVPN_OUT -o lo -j RETURN
     ip6tables -A LAZYVPN_OUT -j DROP
     info "✓ Killswitch enabled - all internet traffic blocked"
+  fi
+
+  # Save iptables rules to make them persistent across reboots
+  if command -v iptables-save &>/dev/null; then
+    iptables-save > /etc/iptables/iptables.rules
+    ip6tables-save > /etc/iptables/ip6tables.rules
+    info "✓ Iptables rules saved for persistence across reboots"
+  fi
+
+  # Enable iptables service to restore rules early at boot (before networking)
+  if systemctl list-unit-files | grep -q '^iptables.service'; then
+    if systemctl enable iptables.service 2>&1; then
+      info "✓ Iptables service enabled - killswitch will activate at boot"
+    else
+      warn "Failed to enable iptables.service - killswitch may not persist across reboots"
+    fi
+  else
+    warn "iptables.service not found - killswitch may not persist across reboots"
   fi
 fi

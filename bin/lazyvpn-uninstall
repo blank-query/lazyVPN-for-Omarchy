@@ -142,6 +142,32 @@ if [[ "$KILLSWITCH_CONFIGURED" == "true" ]]; then
 else
   echo "  - Killswitch was never configured, skipping firewall cleanup."
 fi
+
+# Clean up IPv6 blocking rules if they exist
+if sudo ip6tables -L LAZYVPN_IPV6_BLOCK >/dev/null 2>&1; then
+  echo "  - Found IPv6 blocking rules. Removing them..."
+  sudo ip6tables -D OUTPUT -j LAZYVPN_IPV6_BLOCK 2>/dev/null && echo "    - Removed IPv6 OUTPUT jump"
+  sudo ip6tables -F LAZYVPN_IPV6_BLOCK 2>/dev/null && echo "    - Flushed LAZYVPN_IPV6_BLOCK chain"
+  sudo ip6tables -X LAZYVPN_IPV6_BLOCK 2>/dev/null && echo "    - Deleted LAZYVPN_IPV6_BLOCK chain"
+fi
+
+# Re-enable IPv6 if it was disabled by LazyVPN
+if [[ -f /etc/sysctl.d/99-lazyvpn-ipv6.conf ]]; then
+  echo "  - Re-enabling IPv6..."
+  sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1
+  sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1
+  sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null 2>&1
+  sudo rm -f /etc/sysctl.d/99-lazyvpn-ipv6.conf
+  echo "    - IPv6 re-enabled"
+fi
+
+# Save cleaned iptables rules
+if command -v iptables-save &>/dev/null; then
+  sudo iptables-save > /etc/iptables/iptables.rules 2>/dev/null
+  sudo ip6tables-save > /etc/iptables/ip6tables.rules 2>/dev/null
+  echo "  - Saved cleaned firewall rules"
+fi
+
 echo ""
 
 # --- Step 2: Remove LazyVPN scripts and directory ---

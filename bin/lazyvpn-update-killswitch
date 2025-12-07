@@ -143,3 +143,9 @@ iptables -A LAZYVPN_OUT -j DROP
 ip6tables -A LAZYVPN_OUT -j DROP
 
 info "Killswitch rules updated"
+
+# Save iptables rules to make them persistent across reboots
+if command -v iptables-save &>/dev/null; then
+  iptables-save > /etc/iptables/iptables.rules 2>/dev/null
+  ip6tables-save > /etc/iptables/ip6tables.rules 2>/dev/null
+fi

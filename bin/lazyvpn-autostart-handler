@@ -34,15 +34,62 @@ fi
 # Load config
 load_config "$CONFIG_FILE"
 
+# Ensure IPv6 settings are applied if configured (for first boot or migration)
+# This handles the case where config says DISABLE_IPV6=true but sysctl/iptables aren't set yet
+if [[ "$DISABLE_IPV6" == "true" ]]; then
+  # Check if IPv6 is actually disabled at kernel level
+  IPV6_STATUS=$(sudo sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)
+  if [[ "$IPV6_STATUS" != "1" ]]; then
+    info "IPv6 protection enabled in config but not active - applying now..."
+
+    # Disable IPv6 at kernel level
+    sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
+    sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
+    sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1 >/dev/null 2>&1
+
+    # Create persistent sysctl config if it doesn't exist
+    if [[ ! -f /etc/sysctl.d/99-lazyvpn-ipv6.conf ]]; then
+      echo "# LazyVPN: Disable IPv6 to prevent leaks" | sudo tee /etc/sysctl.d/99-lazyvpn-ipv6.conf >/dev/null
+      echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.d/99-lazyvpn-ipv6.conf >/dev/null
+      echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.d/99-lazyvpn-ipv6.conf >/dev/null
+      echo "net.ipv6.conf.lo.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.d/99-lazyvpn-ipv6.conf >/dev/null
+    fi
+
+    # Add ip6tables DROP rules as backup
+    if ! sudo ip6tables -L LAZYVPN_IPV6_BLOCK -n &>/dev/null; then
+      sudo ip6tables -N LAZYVPN_IPV6_BLOCK 2>/dev/null
+      sudo ip6tables -F LAZYVPN_IPV6_BLOCK 2>/dev/null
+      sudo ip6tables -A LAZYVPN_IPV6_BLOCK -j DROP 2>/dev/null
+      sudo ip6tables -I OUTPUT 1 -j LAZYVPN_IPV6_BLOCK 2>/dev/null
+
+      # Save for persistence
+      sudo ip6tables-save > /etc/iptables/ip6tables.rules 2>/dev/null
+    fi
+
+    info "✓ IPv6 disabled (kernel + firewall)"
+  fi
+fi
+
 # Only proceed if autoconnect is enabled
 if [[ "$AUTOCONNECT" != "true" ]]; then
   exit 0
 fi
 
+# Notify user that autoconnect is starting
+notify "LazyVPN: Autoconnect starting..."
+
 # Determine which server to connect to
 case "$AUTOCONNECT_MODE" in
   quickest)
-    "$SCRIPT_DIR/lazyvpn-quickest"
+    # Check if killswitch is blocking (prevents quickest from working)
+    if [[ "$KILLSWITCH" == "true" ]] && ! is_connected "${CONNECTION_NAME:-wg0}"; then
+      warn "Killswitch is active - cannot test latency to find quickest server"
+      warn "Falling back to random server selection"
+      notify "LazyVPN: Autoconnecting to random server (killswitch prevents latency test)"
+      "$SCRIPT_DIR/lazyvpn-random"
+    else
+      "$SCRIPT_DIR/lazyvpn-quickest"
+    fi
     ;;
   random)
     "$SCRIPT_DIR/lazyvpn-random"
