@@ -224,6 +224,9 @@ while IFS='|' read -r display_name file_path validation_status is_duplicate; do
       # Copy with standardized name
       cp "$file_path" "$WG_DIR/${std_name}.conf"
 
+      # Secure the file permissions (private keys must not be world-readable)
+      chmod 600 "$WG_DIR/${std_name}.conf"
+
       # Validate the copied file to ensure it wasn't corrupted during copy/rename
       if ! validate_config "$WG_DIR/${std_name}.conf"; then
         echo "  ✗ Skipped (validation failed after copy): $std_name"

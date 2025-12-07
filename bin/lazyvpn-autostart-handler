@@ -70,6 +70,26 @@ if [[ "$DISABLE_IPV6" == "true" ]]; then
   fi
 fi
 
+# Start AUTO_RECOVER daemon if enabled
+if [[ "$AUTO_RECOVER" == "true" ]]; then
+  # Check if daemon is already running
+  PID_FILE="$CONFIG_DIR/.auto-recover.pid"
+  DAEMON_RUNNING=false
+
+  if [[ -f "$PID_FILE" ]]; then
+    OLD_PID=$(cat "$PID_FILE")
+    if kill -0 "$OLD_PID" 2>/dev/null; then
+      DAEMON_RUNNING=true
+    fi
+  fi
+
+  if [[ "$DAEMON_RUNNING" != "true" ]]; then
+    info "Starting AUTO_RECOVER daemon..."
+    nohup "$SCRIPT_DIR/lazyvpn-auto-recover-daemon" >/dev/null 2>&1 &
+    info "✓ AUTO_RECOVER daemon started"
+  fi
+fi
+
 # Only proceed if autoconnect is enabled
 if [[ "$AUTOCONNECT" != "true" ]]; then
   exit 0
