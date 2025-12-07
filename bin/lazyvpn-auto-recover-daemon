@@ -54,7 +54,7 @@ fi
 # Main monitoring loop
 CONSECUTIVE_FAILURES=0
 MAX_FAILURES=3
-CHECK_INTERVAL=30  # seconds
+CHECK_INTERVAL=10  # seconds
 
 while true; do
   # Load config

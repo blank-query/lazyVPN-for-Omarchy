@@ -35,6 +35,18 @@ else
   WG_DIR="$HOME/.config/lazyvpn/wireguard"
 fi
 
+# Ensure killswitch chains exist (auto-setup if needed)
+if ! iptables -L LAZYVPN_OUT -n &>/dev/null; then
+  info "Setting up killswitch chains..."
+  if ! "$SCRIPT_DIR/lazyvpn-setup-firewall-killswitch"; then
+    error "Failed to setup killswitch chains"
+  fi
+  # Verify chains were actually created
+  if ! iptables -L LAZYVPN_OUT -n &>/dev/null; then
+    error "Killswitch chains were not created - iptables setup failed"
+  fi
+fi
+
 # Get server name from argument or config
 if [[ -n "$1" ]]; then
   # Server name passed as argument (for pre-connection killswitch updates)
