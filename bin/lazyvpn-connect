@@ -323,6 +323,10 @@ fi
 echo ""
 info "Successfully connected to $SERVER_DISPLAY"
 
+# Send desktop notification
+omarchy-notification-dismiss "LazyVPN" 2>/dev/null || true
+notify-send "󰖂 VPN Connected" "$SERVER_DISPLAY" -t 3000
+
 # Update last connected server in config (atomic)
 if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_FILE"; then
   warn "Connected successfully but failed to save server name to config"

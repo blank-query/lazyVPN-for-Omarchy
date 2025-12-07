@@ -16,12 +16,97 @@ load_config "$CONFIG_FILE"
 # Toggle the setting
 if [[ "$DISABLE_IPV6" == "true" ]]; then
   NEW_VALUE="false"
+  info "Enabling IPv6..."
 else
   NEW_VALUE="true"
+  info "Disabling IPv6..."
 fi
 
 # Update config atomically
 if ! atomic_config_update "DISABLE_IPV6" "$NEW_VALUE" "$CONFIG_FILE"; then
   error "Failed to update config"
   exit 1
+fi
+
+# Check if running as root, if not re-exec with sudo
+if [[ $EUID -ne 0 ]]; then
+  info "IPv6 configuration requires root privileges"
+  info "You will be prompted for your password..."
+  exec sudo -E "$0" "$@"
+fi
+
+SYSCTL_CONF="/etc/sysctl.d/99-lazyvpn-ipv6.conf"
+
+if [[ "$NEW_VALUE" == "true" ]]; then
+  # DISABLE IPv6
+  info "Disabling IPv6 at kernel level..."
+
+  # Disable IPv6 immediately via sysctl
+  sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null
+  sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null
+  sysctl -w net.ipv6.conf.lo.disable_ipv6=1 >/dev/null
+
+  # Make it persistent across reboots
+  cat > "$SYSCTL_CONF" << 'EOF'
+# LazyVPN: Disable IPv6 to prevent leaks
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+
+  info "✓ IPv6 disabled at kernel level"
+
+  # Also add ip6tables DROP rules as backup (defense in depth)
+  info "Adding IPv6 firewall rules as backup..."
+
+  # Create a separate chain for IPv6 blocking
+  if ! ip6tables -L LAZYVPN_IPV6_BLOCK -n &>/dev/null; then
+    ip6tables -N LAZYVPN_IPV6_BLOCK
+  fi
+
+  # Flush and recreate rules
+  ip6tables -F LAZYVPN_IPV6_BLOCK
+  ip6tables -A LAZYVPN_IPV6_BLOCK -j DROP
+
+  # Add jump to our blocking chain if not already present
+  if ! ip6tables -C OUTPUT -j LAZYVPN_IPV6_BLOCK &>/dev/null; then
+    ip6tables -I OUTPUT 1 -j LAZYVPN_IPV6_BLOCK
+  fi
+
+  # Save ip6tables rules for persistence
+  if command -v ip6tables-save &>/dev/null; then
+    ip6tables-save > /etc/iptables/ip6tables.rules 2>/dev/null
+    info "✓ IPv6 firewall rules saved"
+  fi
+
+  info "✓ IPv6 completely disabled (kernel + firewall)"
+else
+  # ENABLE IPv6
+  info "Enabling IPv6..."
+
+  # Enable IPv6 immediately via sysctl
+  sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null
+  sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null
+  sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null
+
+  # Remove persistent config
+  rm -f "$SYSCTL_CONF"
+
+  info "✓ IPv6 enabled at kernel level"
+
+  # Remove IPv6 blocking chain
+  if ip6tables -L LAZYVPN_IPV6_BLOCK -n &>/dev/null; then
+    info "Removing IPv6 firewall rules..."
+    ip6tables -D OUTPUT -j LAZYVPN_IPV6_BLOCK 2>/dev/null
+    ip6tables -F LAZYVPN_IPV6_BLOCK 2>/dev/null
+    ip6tables -X LAZYVPN_IPV6_BLOCK 2>/dev/null
+
+    # Save ip6tables rules for persistence
+    if command -v ip6tables-save &>/dev/null; then
+      ip6tables-save > /etc/iptables/ip6tables.rules 2>/dev/null
+      info "✓ IPv6 firewall rules updated"
+    fi
+  fi
+
+  info "✓ IPv6 enabled"
 fi
