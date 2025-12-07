@@ -149,8 +149,8 @@ You can change this choice by uninstalling and reinstalling (server configs are 
         -   `🔴 NEVER`: Keep killswitch active (internet blocked until reconnect)
 
 -   **🔁 Auto-Recover Daemon**:
-    -   Background daemon monitors VPN connection health (30-second interval)
-    -   3-strike failure threshold before triggering reconnection
+    -   Background daemon monitors VPN connection health (10-second interval)
+    -   3-strike failure threshold before triggering reconnection (30 seconds total)
     -   Attempts 3 reconnections to same server
     -   **Auto-failover** (optional): After 3 failed reconnects, switches to next-fastest server (disabled by default, toggle in Options menu)
     -   Logs to `~/.config/lazyvpn/auto-recover.log` with rotation (max 1000 lines)
