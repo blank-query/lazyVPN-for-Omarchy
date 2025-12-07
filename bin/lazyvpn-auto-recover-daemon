@@ -136,13 +136,27 @@ while true; do
         # If auto-reconnect fails, check if user wants to try another server
         if [[ "${AUTO_FAILOVER:-false}" == "true" ]]; then
           log_message "Attempting failover to alternate server..."
-          # Try quickest server as fallback
-          if "$SCRIPT_DIR/lazyvpn-quickest" >> "$LOG_FILE" 2>&1; then
-            log_message "Failover successful"
-            notify "VPN failed over to alternate server"
-            CONSECUTIVE_FAILURES=0
+
+          # Check if killswitch would block quickest (same logic as autoconnect)
+          if [[ "$KILLSWITCH" == "true" ]] && ! is_connected "$CONN_NAME"; then
+            # Use random instead of quickest when killswitch blocks
+            log_message "Killswitch active - using random server selection"
+            if "$SCRIPT_DIR/lazyvpn-random" >> "$LOG_FILE" 2>&1; then
+              log_message "Failover successful (used random due to killswitch)"
+              notify "VPN failed over to random server"
+              CONSECUTIVE_FAILURES=0
+            else
+              log_message "Failover failed"
+            fi
           else
-            log_message "Failover failed"
+            # Killswitch not blocking, can use quickest
+            if "$SCRIPT_DIR/lazyvpn-quickest" >> "$LOG_FILE" 2>&1; then
+              log_message "Failover successful"
+              notify "VPN failed over to alternate server"
+              CONSECUTIVE_FAILURES=0
+            else
+              log_message "Failover failed"
+            fi
           fi
         fi
       fi
