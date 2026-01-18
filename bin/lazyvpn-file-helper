@@ -98,9 +98,10 @@ case "$1" in
     CONTENT=$(cat)
     validate_netdev_content "$CONTENT"
 
-    # Write file with world-readable permissions (systemd-networkd needs to read it)
+    # Write file with restricted permissions (private keys shouldn't be world-readable)
     echo "$CONTENT" > "$FILE"
-    chmod 644 "$FILE"
+    chmod 640 "$FILE"
+    chown root:systemd-network "$FILE"
     echo "Wrote: $FILE"
     ;;
 
@@ -151,7 +152,8 @@ case "$1" in
     # Rename files and update Name= field
     if [[ -f "$OLD_NETDEV" ]]; then
       sed "s/^Name=.*/Name=$3/" "$OLD_NETDEV" > "$NEW_NETDEV"
-      chmod 644 "$NEW_NETDEV"
+      chmod 640 "$NEW_NETDEV"
+      chown root:systemd-network "$NEW_NETDEV"
       rm -f "$OLD_NETDEV"
     fi
 
