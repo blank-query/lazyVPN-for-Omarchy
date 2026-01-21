@@ -1,0 +1,342 @@
+#!/bin/bash
+
+# Handle actions from the dynamic server browser
+# Called via fzf become() binding with filter state
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+ACTION="$1"
+FILTER_STATE="$2"
+PROVIDER_STATE="$3"
+CACHE_DIR="$4"
+
+if [[ -z "$ACTION" || -z "$FILTER_STATE" || -z "$PROVIDER_STATE" || -z "$CACHE_DIR" ]]; then
+  error "Usage: lazyvpn-browse-action <action> <filter_state> <provider_state> <cache_dir>"
+fi
+
+# Read filter state
+if [[ ! -f "$FILTER_STATE" ]]; then
+  echo "Error: Filter state file not found: $FILTER_STATE"
+  exit 1
+fi
+if [[ ! -f "$PROVIDER_STATE" ]]; then
+  echo "Error: Provider state file not found: $PROVIDER_STATE"
+  exit 1
+fi
+
+source "$FILTER_STATE"
+source "$PROVIDER_STATE"
+
+
+# Build jaq filter from current state
+build_jaq_filter() {
+  local filters=()
+  [[ "$p2p" == "1" ]] && filters+=('.port_forward == true')
+  [[ "$tor" == "1" ]] && filters+=('.tor == true')
+  [[ "$sc" == "1" ]] && filters+=('.secure_core == true')
+  [[ "$stream" == "1" ]] && filters+=('.stream == true')
+  [[ "$free" == "1" ]] && filters+=('.free == true')
+
+  if [[ ${#filters[@]} -gt 0 ]]; then
+    local filter_str
+    filter_str=$(IFS='&'; echo "${filters[*]}" | sed 's/&/ and /g')
+    echo "select($filter_str)"
+  else
+    echo ""
+  fi
+}
+
+# Get list of servers matching current filters
+# Output format: provider:server_name:ip
+get_filtered_servers() {
+  local jaq_filter
+  jaq_filter=$(build_jaq_filter)
+
+  local jaq_cmd
+  if [[ -n "$jaq_filter" ]]; then
+    jaq_cmd="[.[] | $jaq_filter] | .[]"
+  else
+    jaq_cmd=".[]"
+  fi
+
+  # Iterate providers based on current selection
+  if [[ "$current" == "ALL" ]]; then
+    for p in $providers; do
+      local cache="$CACHE_DIR/${p}_servers.json"
+      if [[ -f "$cache" ]]; then
+        jaq -r "$jaq_cmd | [\"$p\", (.server_name // .hostname), .ips[0]] | @tsv" "$cache" 2>/dev/null
+      fi
+    done
+  else
+    local cache="$CACHE_DIR/${current}_servers.json"
+    if [[ -f "$cache" ]]; then
+      jaq -r "$jaq_cmd | [\"$current\", (.server_name // .hostname), .ips[0]] | @tsv" "$cache" 2>/dev/null
+    fi
+  fi
+}
+
+# Describe current filters for display
+describe_filters() {
+  local desc=""
+  [[ "$current" != "ALL" ]] && desc+="Provider: $current  "
+  [[ "$p2p" == "1" ]] && desc+="P2P  "
+  [[ "$tor" == "1" ]] && desc+="Tor  "
+  [[ "$sc" == "1" ]] && desc+="MultiHop  "
+  [[ "$stream" == "1" ]] && desc+="Streaming  "
+  [[ "$free" == "1" ]] && desc+="Free  "
+  [[ -z "$desc" ]] && desc="None (all servers)"
+  echo "$desc"
+}
+
+# Action: Random
+do_random() {
+  local servers=()
+  while IFS=$'\t' read -r provider server_name ip; do
+    [[ -n "$server_name" ]] && servers+=("$provider:$server_name")
+  done < <(get_filtered_servers)
+
+  local count=${#servers[@]}
+
+  if [[ $count -eq 0 ]]; then
+    {
+      clear
+      echo ""
+      echo "No servers match current filters."
+    } </dev/tty >/dev/tty 2>&1
+    exit 0
+  fi
+
+  read -r -p "Connect to random server from $count servers? [y/N] " confirm >&2
+
+  if [[ "${confirm,,}" != "y" ]]; then
+    exit 0
+  fi
+
+  # Pick random
+  local selected="${servers[$RANDOM % $count]}"
+  local provider="${selected%%:*}"
+  local server_name="${selected#*:}"
+
+  echo "" >&2
+  echo "Selected: $server_name ($provider)" >&2
+
+  # Output selection to stdout for main script to handle connection
+  echo "CONNECT:$provider:$server_name"
+}
+
+# Action: Quickest (lowest latency)
+do_quickest() {
+  local servers=()
+  while IFS=$'\t' read -r provider server_name ip; do
+    [[ -n "$server_name" && -n "$ip" ]] && servers+=("$provider:$server_name:$ip")
+  done < <(get_filtered_servers)
+
+  local count=${#servers[@]}
+
+  if [[ $count -eq 0 ]]; then
+    {
+      clear
+      echo ""
+      echo "No servers match current filters."
+    } </dev/tty >/dev/tty 2>&1
+    exit 0
+  fi
+
+  read -r -p "Latency test $count servers and connect to fastest? [y/N] " confirm >&2
+
+  if [[ "${confirm,,}" != "y" ]]; then
+    exit 0
+  fi
+
+  echo "" >&2
+  run_latency_test "${servers[@]}"
+
+  if [[ -n "$BEST_SERVER" ]]; then
+    local provider="${BEST_SERVER%%:*}"
+    local server_name="${BEST_SERVER#*:}"
+    echo "" >&2
+    read -r -p "Connect to $server_name (${BEST_LATENCY}ms)? [y/N] " confirm >&2
+    if [[ "${confirm,,}" == "y" ]]; then
+      # Output selection to stdout for main script to handle connection
+      echo "CONNECT:$provider:$server_name"
+    fi
+  fi
+}
+
+# Action: Latency test (no connect)
+do_latency_test() {
+  local servers=()
+  while IFS=$'\t' read -r provider server_name ip; do
+    [[ -n "$server_name" && -n "$ip" ]] && servers+=("$provider:$server_name:$ip")
+  done < <(get_filtered_servers)
+
+  local count=${#servers[@]}
+
+  if [[ $count -eq 0 ]]; then
+    {
+      clear
+      echo ""
+      echo "No servers match current filters."
+    } </dev/tty >/dev/tty 2>&1
+    exit 0
+  fi
+
+  read -r -p "Latency test $count servers (no connect)? [y/N] " confirm >&2
+
+  if [[ "${confirm,,}" != "y" ]]; then
+    exit 0
+  fi
+
+  run_latency_test "${servers[@]}"
+
+  echo "" >&2
+  echo "Top 10 lowest latency servers:" >&2
+  echo "" >&2
+
+  # Sort and show top 10
+  sort -t: -k3 -n "$RESULTS_FILE" | head -10 | while IFS=: read -r provider server_name latency; do
+    printf "  %4dms  %s (%s)\n" "$latency" "$server_name" "$provider" >&2
+  done
+
+}
+
+# Shared latency test function (outputs to stderr)
+run_latency_test() {
+  local servers=("$@")
+  local count=${#servers[@]}
+  local batch_size=50
+
+  RESULTS_DIR=$(mktemp -d)
+  RESULTS_FILE=$(mktemp)
+  trap 'rm -rf "$RESULTS_DIR" "$RESULTS_FILE"' EXIT
+
+  BEST_SERVER=""
+  BEST_LATENCY=99999
+  local tested=0
+  local reachable=0
+
+  local total_batches=$(( (count + batch_size - 1) / batch_size ))
+
+  # Process in batches
+  for (( i=0; i<count; i+=batch_size )); do
+    local batch_end=$((i + batch_size))
+    [[ $batch_end -gt $count ]] && batch_end=$count
+
+    local batch_num=$(( (i / batch_size) + 1 ))
+    echo "Testing batch $batch_num/$total_batches (servers $((i+1))-$batch_end)..." >&2
+
+    # Launch batch - inline to work in subshells
+    for (( j=i; j<batch_end; j++ )); do
+      (
+        entry="${servers[$j]}"
+        provider="${entry%%:*}"
+        rest="${entry#*:}"
+        server_name="${rest%%:*}"
+        ip="${rest#*:}"
+
+        safe_name=$(echo "${provider}_${server_name}" | tr '/:' '__')
+        result_file="$RESULTS_DIR/$safe_name"
+
+        avg_latency=$(LC_ALL=C ping -c 2 -W 2 "$ip" 2>/dev/null | awk '/^rtt/ {split($4,a,"/"); print int(a[2])}')
+
+        if [[ -n "$avg_latency" ]] && [[ "$avg_latency" =~ ^[0-9]+$ ]]; then
+          echo "$provider:$server_name:$avg_latency" > "$result_file"
+        fi
+      ) &
+    done
+    wait
+
+    # Collect results
+    for result_file in "$RESULTS_DIR"/*; do
+      [[ -f "$result_file" ]] || continue
+
+      local content
+      content=$(cat "$result_file")
+      echo "$content" >> "$RESULTS_FILE"
+
+      local latency="${content##*:}"
+      local server_id="${content%:*}"
+
+      if [[ -n "$latency" ]] && [[ "$latency" =~ ^[0-9]+$ ]]; then
+        ((reachable++))
+        if (( latency < BEST_LATENCY )); then
+          BEST_LATENCY=$latency
+          BEST_SERVER="$server_id"
+        fi
+      fi
+      rm -f "$result_file"
+    done
+
+    tested=$batch_end
+  done
+
+  echo "" >&2
+  echo "Tested: $tested servers, Reachable: $reachable" >&2
+
+  if [[ -n "$BEST_SERVER" ]]; then
+    local best_provider="${BEST_SERVER%%:*}"
+    local best_name="${BEST_SERVER#*:}"
+    echo "Lowest latency: $best_name ($best_provider) - ${BEST_LATENCY}ms" >&2
+  fi
+
+  # Save latency results to cache files
+  save_latency_results
+}
+
+# Save latency test results back to provider cache files
+save_latency_results() {
+  [[ ! -f "$RESULTS_FILE" ]] && return
+
+  local timestamp
+  timestamp=$(date -Iseconds)
+
+  echo "Saving latency results to cache..." >&2
+
+  # Group results by provider
+  declare -A provider_results
+  while IFS=: read -r provider server_name latency; do
+    [[ -z "$provider" || -z "$server_name" || -z "$latency" ]] && continue
+    provider_results["$provider"]+="$server_name:$latency"$'\n'
+  done < "$RESULTS_FILE"
+
+  # Update each provider's cache file
+  for provider in "${!provider_results[@]}"; do
+    local cache_file="$CACHE_DIR/${provider}_servers.json"
+    [[ ! -f "$cache_file" ]] && continue
+
+    # Build jaq update filter for this provider's results
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    # Process each result for this provider
+    while IFS=: read -r server_name latency; do
+      [[ -z "$server_name" || -z "$latency" ]] && continue
+
+      # Update the cache file with latency data
+      jaq --arg name "$server_name" \
+          --arg latency "$latency" \
+          --arg time "$timestamp" \
+          'map(if (.server_name // .hostname) == $name then . + {last_latency_ms: ($latency | tonumber), last_latency_time: $time} else . end)' \
+          "$cache_file" > "$tmp_file" 2>/dev/null
+
+      if [[ -s "$tmp_file" ]]; then
+        mv "$tmp_file" "$cache_file"
+      fi
+    done <<< "${provider_results[$provider]}"
+
+    rm -f "$tmp_file"
+  done
+
+  echo "Latency results saved." >&2
+}
+
+# Main
+case "$ACTION" in
+  random) do_random ;;
+  quickest) do_quickest ;;
+  latency) do_latency_test ;;
+  *) error "Unknown action: $ACTION" ;;
+esac

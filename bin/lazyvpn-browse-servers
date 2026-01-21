@@ -1,0 +1,673 @@
+#!/bin/bash
+
+# Browse and connect to dynamic VPN servers
+# Uses cached server list from gluetun
+# Optimized with jaq for fast single-pass processing
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CACHE_DIR="$CONFIG_DIR/cache"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
+
+# Check for jaq (fast jq alternative)
+if ! command -v jaq &>/dev/null; then
+  error "jaq is required but not installed. Install with: sudo pacman -S jaq"
+fi
+
+# Check for fzf
+if ! command -v fzf &>/dev/null; then
+  error "fzf is required but not installed. Install with: sudo pacman -S fzf"
+fi
+
+# Provider display names
+declare -A PROVIDER_DISPLAY=(
+  [protonvpn]="ProtonVPN"
+  [mullvad]="Mullvad"
+  [ivpn]="IVPN"
+  [pia]="Private Internet Access"
+  [nordvpn]="NordVPN"
+  [surfshark]="Surfshark"
+  [windscribe]="Windscribe"
+)
+
+# Regional indicator symbols for flag emoji (A-Z)
+# Pure bash lookup - no subshells needed
+declare -A RI=(
+  [A]=$'\U1F1E6' [B]=$'\U1F1E7' [C]=$'\U1F1E8' [D]=$'\U1F1E9' [E]=$'\U1F1EA'
+  [F]=$'\U1F1EB' [G]=$'\U1F1EC' [H]=$'\U1F1ED' [I]=$'\U1F1EE' [J]=$'\U1F1EF'
+  [K]=$'\U1F1F0' [L]=$'\U1F1F1' [M]=$'\U1F1F2' [N]=$'\U1F1F3' [O]=$'\U1F1F4'
+  [P]=$'\U1F1F5' [Q]=$'\U1F1F6' [R]=$'\U1F1F7' [S]=$'\U1F1F8' [T]=$'\U1F1F9'
+  [U]=$'\U1F1FA' [V]=$'\U1F1FB' [W]=$'\U1F1FC' [X]=$'\U1F1FD' [Y]=$'\U1F1FE'
+  [Z]=$'\U1F1FF'
+)
+
+# Country code to name lookup (for Secure Core entry countries)
+declare -A COUNTRY_NAME=(
+  [CH]="Switzerland" [IS]="Iceland" [SE]="Sweden"
+)
+
+# Select provider if multiple configured
+select_provider() {
+  local providers=()
+
+  for provider_file in "$PROVIDERS_DIR"/*.conf; do
+    if [[ -f "$provider_file" ]]; then
+      local provider
+      provider=$(basename "$provider_file" .conf)
+      local cache_file="$CACHE_DIR/${provider}_servers.json"
+
+      if [[ -f "$cache_file" ]]; then
+        local count
+        count=$(jaq 'length' "$cache_file" 2>/dev/null || echo "0")
+        providers+=("${PROVIDER_DISPLAY[$provider]} ($count servers)|$provider")
+      fi
+    fi
+  done
+
+  if [[ ${#providers[@]} -eq 0 ]]; then
+    echo ""
+    echo "No providers configured with cached servers."
+    echo ""
+    echo "Setup a provider first:"
+    echo "  lazyvpn-provider-setup"
+    echo ""
+    echo "Then fetch servers:"
+    echo "  lazyvpn-fetch-servers"
+    exit 1
+  fi
+
+  if [[ ${#providers[@]} -eq 1 ]]; then
+    # Only one provider - use it automatically
+    echo "${providers[0]}" | cut -d'|' -f2
+    return
+  fi
+
+  # Multiple providers - let user choose
+  local selected
+  selected=$(printf '%s\n' "${providers[@]}" | cut -d'|' -f1 | fzf --prompt="Select provider: " --height=40%)
+
+  if [[ -z "$selected" ]]; then
+    exit 0
+  fi
+
+  # Find matching provider
+  for p in "${providers[@]}"; do
+    if [[ "$p" == "$selected"* ]]; then
+      echo "$p" | cut -d'|' -f2
+      return
+    fi
+  done
+}
+
+# Stream formatted server list to stdout
+# Uses single-pass jaq + pure bash flag conversion (no subshells per line)
+stream_server_list() {
+  local cache_file="$1"
+  local filter="$2"
+
+  # Build jaq filter
+  local jaq_cmd
+  if [[ -n "$filter" ]]; then
+    jaq_cmd="[.[] | $filter] | .[]"
+  else
+    jaq_cmd=".[]"
+  fi
+
+  # Single-pass jaq extracts all fields at once, outputs tab-separated
+  # Format: country_code\tcountry\tcity\tserver_name\thostname\tfeatures\tis_secure_core
+  jaq -r "$jaq_cmd | [
+    (if .server_name | test(\"^[A-Z]{2}[-#]\") then .server_name[0:2] else
+     if .hostname | test(\"^[a-z]{2}[-\\\\.]\") then (.hostname[0:2] | ascii_upcase) else \"\" end
+     end),
+    .country,
+    (.city // \"\"),
+    .server_name,
+    .hostname,
+    ((if .port_forward then \"🔄\" else \"\" end) +
+     (if .tor then \"🧅\" else \"\" end) +
+     (if .secure_core then \"🔒\" else \"\" end) +
+     (if .stream then \"📺\" else \"\" end) +
+     (if .free then \"🤡\" else \"\" end)),
+    (if .secure_core then \"1\" else \"0\" end)
+  ] | @tsv" "$cache_file" 2>/dev/null |
+  while IFS=$'\t' read -r cc country city server_name hostname features is_sc; do
+    local display=""
+
+    # Handle Secure Core servers specially
+    if [[ "$is_sc" == "1" ]]; then
+      # Try to parse entry-exit from server name (format: CH-AR#2)
+      if [[ "$server_name" =~ ^([A-Z]{2})-([A-Z]{2})# ]]; then
+        local entry_cc="${BASH_REMATCH[1]}"
+        local exit_cc="${BASH_REMATCH[2]}"
+        local entry_flag="${RI[${entry_cc:0:1}]}${RI[${entry_cc:1:1}]}"
+        local exit_flag="${RI[${exit_cc:0:1}]}${RI[${exit_cc:1:1}]}"
+        local entry_name="${COUNTRY_NAME[$entry_cc]:-$entry_cc}"
+        # Display: "🇨🇭 Switzerland → 🇦🇷 Argentina (CH-AR#2) 🔒"
+        display="$entry_flag $entry_name → $exit_flag $country"
+      else
+        # Secure Core but can't parse entry/exit - just show with lock
+        local flag=""
+        if [[ ${#cc} -eq 2 ]]; then
+          flag="${RI[${cc:0:1}]}${RI[${cc:1:1}]}"
+        fi
+        display="$flag $country"
+      fi
+      [[ -n "$city" ]] && display+=" - $city"
+      display+=" ($server_name)"
+      [[ -n "$features" ]] && display+=" $features"
+    else
+      # Regular server display
+      local flag=""
+      if [[ ${#cc} -eq 2 ]]; then
+        flag="${RI[${cc:0:1}]}${RI[${cc:1:1}]}"
+      fi
+      display="$flag $country"
+      [[ -n "$city" ]] && display+=" - $city"
+      display+=" ($server_name)"
+      [[ -n "$features" ]] && display+=" $features"
+    fi
+
+    # Output: display|server_name|hostname
+    echo "${display}|${server_name}|${hostname}"
+  done
+}
+
+# Main browse function with streaming to fzf and live filtering
+browse_servers() {
+  local provider="$1"  # Can be a provider name or "ALL"
+
+  # Build list of available providers
+  local providers=()
+  for pf in "$PROVIDERS_DIR"/*.conf; do
+    if [[ -f "$pf" ]]; then
+      local p
+      p=$(basename "$pf" .conf)
+      local p_cache="$CACHE_DIR/${p}_servers.json"
+      [[ -f "$p_cache" ]] && providers+=("$p")
+    fi
+  done
+
+  if [[ ${#providers[@]} -eq 0 ]]; then
+    echo "No providers configured with cached servers."
+    echo "Run: lazyvpn-provider-setup && lazyvpn-fetch-servers"
+    return 1
+  fi
+
+  # Validate provider or default to ALL
+  if [[ "$provider" != "ALL" ]]; then
+    local valid=false
+    for p in "${providers[@]}"; do
+      [[ "$p" == "$provider" ]] && valid=true && break
+    done
+    if [[ "$valid" != "true" ]]; then
+      provider="ALL"
+    fi
+  fi
+
+  # Create temp files for filter state and scripts
+  local filter_state preview_script filter_script header_script list_script provider_state
+  filter_state=$(mktemp)
+  preview_script=$(mktemp)
+  filter_script=$(mktemp)
+  header_script=$(mktemp)
+  list_script=$(mktemp)
+  provider_state=$(mktemp)
+  trap "rm -f '$filter_state' '$preview_script' '$filter_script' '$header_script' '$list_script' '$provider_state'" EXIT
+
+  # Initialize filter state (0 = off, 1 = on)
+  cat > "$filter_state" << EOF
+p2p=0
+tor=0
+sc=0
+stream=0
+free=0
+EOF
+
+  # Initialize provider state - store current provider and list
+  # Format: current_provider followed by list of all providers
+  {
+    echo "current=$provider"
+    echo "providers=${providers[*]}"
+  } > "$provider_state"
+
+  # Preview script - searches across all provider caches
+  cat > "$preview_script" << 'PREVIEW_EOF'
+#!/bin/bash
+IFS='|' read -r display server_name provider_key <<< "$1"
+CACHE_DIR="$2"
+
+# Find the server in provider cache
+CACHE_FILE="$CACHE_DIR/${provider_key}_servers.json"
+[[ ! -f "$CACHE_FILE" ]] && exit 0
+
+IFS=$'\t' read -r country city host ip pf tor sc stream free latency_ms latency_time < <(
+  jaq -r --arg name "$server_name" '
+    .[] | select((.server_name // .hostname) == $name) |
+    [.country, (.city // ""), .hostname, (.ips[0] // ""),
+     (.port_forward // false), (.tor // false),
+     (.secure_core // false), (.stream // false), (.free // false),
+     (.last_latency_ms // ""), (.last_latency_time // "")] | @tsv
+  ' "$CACHE_FILE" 2>/dev/null
+)
+
+[[ -z "$country" ]] && exit 0
+
+declare -A SC_ENTRY=([CH]="Switzerland" [IS]="Iceland" [SE]="Sweden")
+
+features=""
+[[ "$pf" == "true" ]] && features+="🔄 P2P  "
+[[ "$tor" == "true" ]] && features+="🧅 Tor  "
+[[ "$sc" == "true" ]] && features+="🔒 Secure Core  "
+[[ "$stream" == "true" ]] && features+="📺 Streaming  "
+[[ "$free" == "true" ]] && features+="🤡 Free"
+[[ -z "$features" ]] && features="Standard"
+
+echo "┌─ $server_name"
+echo "│"
+if [[ "$sc" == "true" ]]; then
+  if [[ "$server_name" =~ ^([A-Z]{2})-([A-Z]{2})# ]]; then
+    entry="${BASH_REMATCH[1]}"
+    exit_cc="${BASH_REMATCH[2]}"
+    entry_name="${SC_ENTRY[$entry]:-$entry}"
+    echo "│  Entry:  $entry_name ($entry)"
+    echo "│  Exit:   $country ($exit_cc)"
+  else
+    echo "│  Country: $country (Secure Core)"
+  fi
+  [[ -n "$city" ]] && echo "│  City:   $city"
+else
+  echo "│  Country: $country"
+  [[ -n "$city" ]] && echo "│  City:    $city"
+fi
+echo "│"
+echo "│  IP: $ip"
+if [[ -n "$latency_ms" ]]; then
+  # Format the timestamp nicely
+  if [[ -n "$latency_time" ]]; then
+    age=$(( ($(date +%s) - $(date -d "$latency_time" +%s 2>/dev/null || echo 0)) / 60 ))
+    if [[ $age -lt 60 ]]; then
+      age_str="${age}m ago"
+    elif [[ $age -lt 1440 ]]; then
+      age_str="$((age / 60))h ago"
+    else
+      age_str="$((age / 1440))d ago"
+    fi
+    echo "│  Latency: ${latency_ms}ms ($age_str)"
+  else
+    echo "│  Latency: ${latency_ms}ms"
+  fi
+fi
+echo "│"
+echo "└─ $features"
+PREVIEW_EOF
+  chmod +x "$preview_script"
+
+  # Toggle filter script
+  cat > "$filter_script" << EOF
+#!/bin/bash
+STATE_FILE="\$1"
+FILTER="\$2"
+source "\$STATE_FILE"
+if [[ "\${!FILTER}" == "1" ]]; then
+  sed -i "s/^\${FILTER}=1/\${FILTER}=0/" "\$STATE_FILE"
+else
+  sed -i "s/^\${FILTER}=0/\${FILTER}=1/" "\$STATE_FILE"
+fi
+EOF
+  chmod +x "$filter_script"
+
+  # Provider cycle script - cycles through ALL -> provider1 -> provider2 -> ... -> ALL
+  local provider_cycle_script favorite_script
+  provider_cycle_script=$(mktemp)
+  favorite_script=$(mktemp)
+  trap "rm -f '$filter_state' '$preview_script' '$filter_script' '$header_script' '$list_script' '$provider_state' '$provider_cycle_script' '$favorite_script'" EXIT
+
+  cat > "$provider_cycle_script" << 'CYCLE_EOF'
+#!/bin/bash
+PROVIDER_STATE="$1"
+source "$PROVIDER_STATE"
+
+# Build array: ALL + all providers
+options=("ALL" $providers)
+
+# Find current index
+current_idx=0
+for i in "${!options[@]}"; do
+  if [[ "${options[$i]}" == "$current" ]]; then
+    current_idx=$i
+    break
+  fi
+done
+
+# Cycle to next
+next_idx=$(( (current_idx + 1) % ${#options[@]} ))
+new_provider="${options[$next_idx]}"
+
+# Update state file
+sed -i "s/^current=.*/current=$new_provider/" "$PROVIDER_STATE"
+CYCLE_EOF
+  chmod +x "$provider_cycle_script"
+
+  # Favorite toggle script - adds/removes server from favorites file
+  cat > "$favorite_script" << 'FAV_EOF'
+#!/bin/bash
+# Args: provider_key server_name
+PROVIDER="$1"
+SERVER="$2"
+FAVORITES_FILE="$HOME/.config/lazyvpn/favorites"
+
+# Ensure file exists
+mkdir -p "$(dirname "$FAVORITES_FILE")"
+touch "$FAVORITES_FILE"
+
+# Format: provider:server_name
+ENTRY="$PROVIDER:$SERVER"
+
+if grep -qxF "$ENTRY" "$FAVORITES_FILE" 2>/dev/null; then
+  # Remove from favorites
+  grep -vxF "$ENTRY" "$FAVORITES_FILE" > "$FAVORITES_FILE.tmp"
+  mv "$FAVORITES_FILE.tmp" "$FAVORITES_FILE"
+else
+  # Add to favorites
+  echo "$ENTRY" >> "$FAVORITES_FILE"
+fi
+FAV_EOF
+  chmod +x "$favorite_script"
+
+  # Header generation script
+  cat > "$header_script" << 'HEADER_EOF'
+#!/bin/bash
+FILTER_STATE="$1"
+PROVIDER_STATE="$2"
+CACHE_DIR="$3"
+source "$FILTER_STATE"
+source "$PROVIDER_STATE"
+
+# Provider display names
+declare -A PNAMES=(
+  [protonvpn]="ProtonVPN"
+  [mullvad]="Mullvad"
+  [ivpn]="IVPN"
+  [pia]="PIA"
+  [nordvpn]="NordVPN"
+  [surfshark]="Surfshark"
+  [windscribe]="Windscribe"
+  [ALL]="ALL"
+)
+
+# Build header showing filter states (line 1) and actions (line 2)
+header=""
+[[ "$p2p" == "1" ]] && header+="[1]🔄P2P" || header+="1:🔄P2P"
+header+=" "
+[[ "$tor" == "1" ]] && header+="[2]🧅Tor" || header+="2:🧅Tor"
+header+=" "
+[[ "$sc" == "1" ]] && header+="[3]🔒MultiHop" || header+="3:🔒MultiHop"
+header+=" "
+[[ "$stream" == "1" ]] && header+="[4]📺Stream" || header+="4:📺Stream"
+header+=" "
+[[ "$free" == "1" ]] && header+="[5]🤡Free" || header+="5:🤡Free"
+
+# Build jaq filter
+jaq_filter=""
+filters=()
+[[ "$p2p" == "1" ]] && filters+=('.port_forward == true')
+[[ "$tor" == "1" ]] && filters+=('.tor == true')
+[[ "$sc" == "1" ]] && filters+=('.secure_core == true')
+[[ "$stream" == "1" ]] && filters+=('.stream == true')
+[[ "$free" == "1" ]] && filters+=('.free == true')
+
+if [[ ${#filters[@]} -gt 0 ]]; then
+  filter_str=$(IFS='&'; echo "${filters[*]}" | sed 's/&/ and /g')
+  jaq_filter="select($filter_str)"
+fi
+
+# Count matching servers
+count=0
+if [[ "$current" == "ALL" ]]; then
+  for p in $providers; do
+    cache="$CACHE_DIR/${p}_servers.json"
+    if [[ -f "$cache" ]]; then
+      if [[ -n "$jaq_filter" ]]; then
+        c=$(jaq "[.[] | $jaq_filter] | length" "$cache" 2>/dev/null)
+      else
+        c=$(jaq 'length' "$cache" 2>/dev/null)
+      fi
+      count=$((count + c))
+    fi
+  done
+else
+  cache="$CACHE_DIR/${current}_servers.json"
+  if [[ -f "$cache" ]]; then
+    if [[ -n "$jaq_filter" ]]; then
+      count=$(jaq "[.[] | $jaq_filter] | length" "$cache" 2>/dev/null)
+    else
+      count=$(jaq 'length' "$cache" 2>/dev/null)
+    fi
+  fi
+fi
+
+printf "%s │ %d servers\n" "$header" "$count"
+printf "6:🎲Random 7:⚡Fastest 8:⏱️Latency 9:⭐Fav 0:%s\n" "${PNAMES[$current]:-$current}"
+HEADER_EOF
+  chmod +x "$header_script"
+
+  # List generation script (outputs formatted server list)
+  # Output format: display|server_name|provider_key
+  cat > "$list_script" << 'LIST_EOF'
+#!/bin/bash
+FILTER_STATE="$1"
+PROVIDER_STATE="$2"
+CACHE_DIR="$3"
+source "$FILTER_STATE"
+source "$PROVIDER_STATE"
+
+# Regional indicator symbols
+declare -A RI=(
+  [A]=$'\U1F1E6' [B]=$'\U1F1E7' [C]=$'\U1F1E8' [D]=$'\U1F1E9' [E]=$'\U1F1EA'
+  [F]=$'\U1F1EB' [G]=$'\U1F1EC' [H]=$'\U1F1ED' [I]=$'\U1F1EE' [J]=$'\U1F1EF'
+  [K]=$'\U1F1F0' [L]=$'\U1F1F1' [M]=$'\U1F1F2' [N]=$'\U1F1F3' [O]=$'\U1F1F4'
+  [P]=$'\U1F1F5' [Q]=$'\U1F1F6' [R]=$'\U1F1F7' [S]=$'\U1F1F8' [T]=$'\U1F1F9'
+  [U]=$'\U1F1FA' [V]=$'\U1F1FB' [W]=$'\U1F1FC' [X]=$'\U1F1FD' [Y]=$'\U1F1FE'
+  [Z]=$'\U1F1FF'
+)
+declare -A COUNTRY_NAME=([CH]="Switzerland" [IS]="Iceland" [SE]="Sweden")
+
+# Build jaq filter
+filters=()
+[[ "$p2p" == "1" ]] && filters+=('.port_forward == true')
+[[ "$tor" == "1" ]] && filters+=('.tor == true')
+[[ "$sc" == "1" ]] && filters+=('.secure_core == true')
+[[ "$stream" == "1" ]] && filters+=('.stream == true')
+[[ "$free" == "1" ]] && filters+=('.free == true')
+
+jaq_filter=""
+if [[ ${#filters[@]} -gt 0 ]]; then
+  filter_str=$(IFS='&'; echo "${filters[*]}" | sed 's/&/ and /g')
+  jaq_filter="select($filter_str)"
+fi
+
+# Build jaq command
+if [[ -n "$jaq_filter" ]]; then
+  jaq_cmd="[.[] | $jaq_filter] | .[]"
+else
+  jaq_cmd=".[]"
+fi
+
+# Load favorites
+FAVORITES_FILE="$HOME/.config/lazyvpn/favorites"
+declare -A IS_FAVORITE
+if [[ -f "$FAVORITES_FILE" ]]; then
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && IS_FAVORITE["$line"]=1
+  done < "$FAVORITES_FILE"
+fi
+
+# Function to output servers from a cache file
+output_servers() {
+  local cache_file="$1"
+  local provider_key="$2"
+
+  jaq -r "$jaq_cmd | [
+    (if .server_name | test(\"^[A-Z]{2}[-#]\") then .server_name[0:2] else
+     if .hostname | test(\"^[a-z]{2}[-\\\\.]\") then (.hostname[0:2] | ascii_upcase) else \"\" end
+     end),
+    .country,
+    (.city // \"\"),
+    .server_name,
+    .hostname,
+    ((if .port_forward then \"🔄\" else \"\" end) +
+     (if .tor then \"🧅\" else \"\" end) +
+     (if .secure_core then \"🔒\" else \"\" end) +
+     (if .stream then \"📺\" else \"\" end) +
+     (if .free then \"🤡\" else \"\" end)),
+    (if .secure_core then \"1\" else \"0\" end)
+  ] | @tsv" "$cache_file" 2>/dev/null |
+  while IFS=$'\t' read -r cc country city server_name hostname features is_sc; do
+    display=""
+
+    # Check if favorited
+    fav_key="${provider_key}:${server_name}"
+    fav_star=""
+    [[ -n "${IS_FAVORITE[$fav_key]}" ]] && fav_star="⭐ "
+
+    if [[ "$is_sc" == "1" ]]; then
+      if [[ "$server_name" =~ ^([A-Z]{2})-([A-Z]{2})# ]]; then
+        entry_cc="${BASH_REMATCH[1]}"
+        exit_cc="${BASH_REMATCH[2]}"
+        entry_flag="${RI[${entry_cc:0:1}]}${RI[${entry_cc:1:1}]}"
+        exit_flag="${RI[${exit_cc:0:1}]}${RI[${exit_cc:1:1}]}"
+        entry_name="${COUNTRY_NAME[$entry_cc]:-$entry_cc}"
+        display="${fav_star}$entry_flag $entry_name → $exit_flag $country"
+      else
+        flag=""
+        [[ ${#cc} -eq 2 ]] && flag="${RI[${cc:0:1}]}${RI[${cc:1:1}]}"
+        display="${fav_star}$flag $country"
+      fi
+      [[ -n "$city" ]] && display+=" - $city"
+      display+=" ($server_name)"
+      [[ -n "$features" ]] && display+=" $features"
+    else
+      flag=""
+      [[ ${#cc} -eq 2 ]] && flag="${RI[${cc:0:1}]}${RI[${cc:1:1}]}"
+      display="${fav_star}$flag $country"
+      [[ -n "$city" ]] && display+=" - $city"
+      display+=" ($server_name)"
+      [[ -n "$features" ]] && display+=" $features"
+    fi
+    echo "${display}|${server_name}|${provider_key}"
+  done
+}
+
+# Output servers based on current provider selection
+if [[ "$current" == "ALL" ]]; then
+  for p in $providers; do
+    cache="$CACHE_DIR/${p}_servers.json"
+    [[ -f "$cache" ]] && output_servers "$cache" "$p"
+  done
+else
+  cache="$CACHE_DIR/${current}_servers.json"
+  [[ -f "$cache" ]] && output_servers "$cache" "$current"
+fi
+LIST_EOF
+  chmod +x "$list_script"
+
+  # Generate initial header
+  local initial_header
+  initial_header=$("$header_script" "$filter_state" "$provider_state" "$CACHE_DIR")
+
+  # Build fzf options
+  local fzf_opts=(
+    --prompt="> "
+    --delimiter='|'
+    --with-nth=1
+    --preview="$preview_script {} '$CACHE_DIR'"
+    --preview-window=right:35%:wrap
+    --height=80%
+    --header="$initial_header"
+    --bind="1:execute-silent($filter_script $filter_state p2p)+reload($list_script $filter_state $provider_state $CACHE_DIR)+transform-header($header_script $filter_state $provider_state $CACHE_DIR)"
+    --bind="2:execute-silent($filter_script $filter_state tor)+reload($list_script $filter_state $provider_state $CACHE_DIR)+transform-header($header_script $filter_state $provider_state $CACHE_DIR)"
+    --bind="3:execute-silent($filter_script $filter_state sc)+reload($list_script $filter_state $provider_state $CACHE_DIR)+transform-header($header_script $filter_state $provider_state $CACHE_DIR)"
+    --bind="4:execute-silent($filter_script $filter_state stream)+reload($list_script $filter_state $provider_state $CACHE_DIR)+transform-header($header_script $filter_state $provider_state $CACHE_DIR)"
+    --bind="5:execute-silent($filter_script $filter_state free)+reload($list_script $filter_state $provider_state $CACHE_DIR)+transform-header($header_script $filter_state $provider_state $CACHE_DIR)"
+    --bind="0:execute-silent($provider_cycle_script $provider_state)+reload($list_script $filter_state $provider_state $CACHE_DIR)+transform-header($header_script $filter_state $provider_state $CACHE_DIR)"
+    --bind="6:become($SCRIPT_DIR/lazyvpn-browse-action random $filter_state $provider_state $CACHE_DIR)"
+    --bind="7:become($SCRIPT_DIR/lazyvpn-browse-action quickest $filter_state $provider_state $CACHE_DIR)"
+    --bind="8:become($SCRIPT_DIR/lazyvpn-browse-action latency $filter_state $provider_state $CACHE_DIR)"
+    --bind="9:execute-silent($favorite_script {3} {2})+reload($list_script $filter_state $provider_state $CACHE_DIR)"
+  )
+
+  # Run fzf with live filtering
+  local selected
+  selected=$("$list_script" "$filter_state" "$provider_state" "$CACHE_DIR" | fzf "${fzf_opts[@]}")
+
+  if [[ -z "$selected" ]]; then
+    return 1
+  fi
+
+  # Check if this is a CONNECT command from action script (random/quickest)
+  if [[ "$selected" =~ ^CONNECT:([^:]+):(.+)$ ]]; then
+    local provider="${BASH_REMATCH[1]}"
+    local server_name="${BASH_REMATCH[2]}"
+    "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$provider" "$server_name"
+    return 0
+  fi
+
+  # Extract server details: display|server_name|provider_key
+  local display server_name provider_key
+  IFS='|' read -r display server_name provider_key <<< "$selected"
+
+  echo ""
+  echo "Selected: $server_name"
+
+  # Connect to the server using the provider from the selection
+  "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$provider_key" "$server_name"
+  return 0
+}
+
+# Main
+case "$1" in
+  --help|-h)
+    echo "LazyVPN Server Browser"
+    echo ""
+    echo "Browse and connect to VPN servers from the dynamic server list."
+    echo ""
+    echo "Usage:"
+    echo "  lazyvpn-browse-servers              # Browse all servers (default)"
+    echo "  lazyvpn-browse-servers PROVIDER     # Browse specific provider"
+    echo ""
+    echo "Filters (toggle with number keys):"
+    echo "  1  P2P/Port Forward"
+    echo "  2  Tor"
+    echo "  3  MultiHop (Secure Core)"
+    echo "  4  Streaming"
+    echo "  5  Free"
+    echo "  0  Cycle provider (ALL -> Provider1 -> ...)"
+    echo ""
+    echo "Actions (respects current filters):"
+    echo "  6  Random - connect to random server"
+    echo "  7  Quickest - find and connect to lowest latency"
+    echo "  8  Latency test - test all servers without connecting"
+    echo "  9  Favorite - toggle favorite on highlighted server"
+    echo ""
+    ;;
+
+  "")
+    # Default to ALL providers
+    browse_servers "ALL"
+    ;;
+
+  *)
+    provider="$1"
+    if [[ ! -f "$PROVIDERS_DIR/${provider}.conf" ]]; then
+      # Check if it's a valid provider key
+      if [[ "$provider" != "ALL" ]]; then
+        error "Provider not configured: $provider"
+      fi
+    fi
+    browse_servers "$provider"
+    ;;
+esac

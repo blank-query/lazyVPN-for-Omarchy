@@ -85,21 +85,53 @@ while true; do
     continue
   fi
 
-  # Get pretty server name for display
-  PRETTY_SERVER=$(get_pretty_server_name "$LAST_SERVER" "$SCRIPT_DIR")
+  # Handle dynamic server format: "dynamic:provider:server_name"
+  IS_DYNAMIC=false
+  ENDPOINT=""
+  PRETTY_SERVER=""
 
-  # Get VPN gateway from config
-  WG_DIR="$CONFIG_DIR/wireguard"
-  VPN_CONFIG="$WG_DIR/${LAST_SERVER}.conf"
+  if [[ "$LAST_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+    IS_DYNAMIC=true
+    PROVIDER="${BASH_REMATCH[1]}"
+    SERVER_NAME="${BASH_REMATCH[2]}"
+    PRETTY_SERVER="$SERVER_NAME"
 
-  if [[ ! -f "$VPN_CONFIG" ]]; then
-    log_message "Config not found for $LAST_SERVER"
-    sleep "$CHECK_INTERVAL"
-    continue
+    # Look up endpoint from cache
+    CACHE_FILE="$CONFIG_DIR/cache/${PROVIDER}_servers.json"
+    if [[ -f "$CACHE_FILE" ]] && command -v jq &>/dev/null; then
+      SERVER_JSON=$(jq --arg name "$SERVER_NAME" '.[] | select(.server_name == $name)' "$CACHE_FILE" 2>/dev/null)
+      if [[ -n "$SERVER_JSON" ]]; then
+        ENDPOINT=$(echo "$SERVER_JSON" | jq -r '.ips[0] // empty')
+        COUNTRY=$(echo "$SERVER_JSON" | jq -r '.country // ""')
+        CITY=$(echo "$SERVER_JSON" | jq -r '.city // ""')
+        PRETTY_SERVER="$COUNTRY"
+        [[ -n "$CITY" ]] && PRETTY_SERVER+=" - $CITY"
+        PRETTY_SERVER+=" ($SERVER_NAME)"
+      fi
+    fi
+
+    if [[ -z "$ENDPOINT" ]]; then
+      log_message "Could not find endpoint for dynamic server $SERVER_NAME"
+      sleep "$CHECK_INTERVAL"
+      continue
+    fi
+  else
+    # Traditional config file server
+    PRETTY_SERVER=$(get_pretty_server_name "$LAST_SERVER" "$SCRIPT_DIR")
+
+    # Get VPN gateway from config
+    WG_DIR="$CONFIG_DIR/wireguard"
+    VPN_CONFIG="$WG_DIR/${LAST_SERVER}.conf"
+
+    if [[ ! -f "$VPN_CONFIG" ]]; then
+      log_message "Config not found for $LAST_SERVER"
+      sleep "$CHECK_INTERVAL"
+      continue
+    fi
+
+    # Get endpoint IP
+    ENDPOINT=$(grep -m1 "^Endpoint" "$VPN_CONFIG" | cut -d= -f2 | tr -d ' ' | cut -d: -f1)
   fi
-
-  # Get endpoint IP
-  ENDPOINT=$(grep -m1 "^Endpoint" "$VPN_CONFIG" | cut -d= -f2 | tr -d ' ' | cut -d: -f1)
 
   if [[ -z "$ENDPOINT" ]]; then
     log_message "Could not determine endpoint for $LAST_SERVER"
@@ -124,14 +156,25 @@ while true; do
       log_message "Connection to $LAST_SERVER failed. Attempting reconnect..."
       notify "VPN connection lost!\nAttempting to reconnect to $PRETTY_SERVER..."
 
-      # Attempt reconnect
-      if "$SCRIPT_DIR/lazyvpn-connect" "$LAST_SERVER" >> "$LOG_FILE" 2>&1; then
+      # Attempt reconnect (handle both dynamic and traditional servers)
+      RECONNECT_SUCCESS=false
+      if [[ "$IS_DYNAMIC" == "true" ]]; then
+        if "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER_NAME" >> "$LOG_FILE" 2>&1; then
+          RECONNECT_SUCCESS=true
+        fi
+      else
+        if "$SCRIPT_DIR/lazyvpn-connect" "$LAST_SERVER" >> "$LOG_FILE" 2>&1; then
+          RECONNECT_SUCCESS=true
+        fi
+      fi
+
+      if [[ "$RECONNECT_SUCCESS" == "true" ]]; then
         log_message "Successfully reconnected to $LAST_SERVER"
         notify "VPN reconnected successfully to $PRETTY_SERVER"
         CONSECUTIVE_FAILURES=0
       else
         log_message "Failed to reconnect to $LAST_SERVER"
-        notify "⚠️ Failed to reconnect VPN!\nPlease reconnect manually."
+        notify "VPN connection failed!\nAttempting to reconnect to $PRETTY_SERVER..."
 
         # If auto-reconnect fails, check if user wants to try another server
         if [[ "${AUTO_FAILOVER:-false}" == "true" ]]; then

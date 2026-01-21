@@ -1,0 +1,347 @@
+#!/bin/bash
+
+# Setup a VPN provider using a single config file to extract credentials
+# The private key works for ALL servers from the same provider
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
+DOWNLOADS_DIR="$HOME/Downloads"
+
+# Ensure providers directory exists
+mkdir -p "$PROVIDERS_DIR"
+
+# Supported providers (must have gluetun support)
+declare -A SUPPORTED_PROVIDERS=(
+  [protonvpn]="ProtonVPN"
+  [mullvad]="Mullvad"
+  [ivpn]="IVPN"
+  [pia]="Private Internet Access"
+  [nordvpn]="NordVPN"
+  [surfshark]="Surfshark"
+  [windscribe]="Windscribe"
+)
+
+# Helper function to parse config values
+parse_wg_value() {
+  local key="$1"
+  local file="$2"
+  grep -i "^${key}" "$file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r'
+}
+
+# Detect provider from config file
+detect_provider() {
+  local config_file="$1"
+  local provider=""
+
+  # Method 1: DNS server detection
+  local dns
+  dns=$(parse_wg_value "DNS" "$config_file")
+
+  case "$dns" in
+    10.2.0.1) provider="protonvpn" ;;
+    10.64.0.1|193.138.218.74) provider="mullvad" ;;
+    172.16.0.1) provider="ivpn" ;;
+    10.0.0.241|10.0.0.242) provider="pia" ;;
+  esac
+
+  # Method 2: Endpoint domain detection
+  if [[ -z "$provider" ]]; then
+    local endpoint
+    endpoint=$(parse_wg_value "Endpoint" "$config_file")
+
+    if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]]; then
+      provider="protonvpn"
+    elif [[ "$endpoint" =~ mullvad\.net ]]; then
+      provider="mullvad"
+    elif [[ "$endpoint" =~ ivpn\.net ]]; then
+      provider="ivpn"
+    elif [[ "$endpoint" =~ privateinternetaccess\.com ]]; then
+      provider="pia"
+    elif [[ "$endpoint" =~ nordvpn\.com ]]; then
+      provider="nordvpn"
+    elif [[ "$endpoint" =~ surfshark\.com ]]; then
+      provider="surfshark"
+    elif [[ "$endpoint" =~ windscribe\.com ]]; then
+      provider="windscribe"
+    fi
+  fi
+
+  # Method 3: Config file comments
+  if [[ -z "$provider" ]]; then
+    if grep -qi "protonvpn" "$config_file"; then
+      provider="protonvpn"
+    elif grep -qi "mullvad" "$config_file"; then
+      provider="mullvad"
+    elif grep -qi "ivpn" "$config_file"; then
+      provider="ivpn"
+    elif grep -qi "nordvpn" "$config_file"; then
+      provider="nordvpn"
+    elif grep -qi "surfshark" "$config_file"; then
+      provider="surfshark"
+    fi
+  fi
+
+  echo "$provider"
+}
+
+# Validate WireGuard private key format (base64, 44 chars with =)
+validate_private_key() {
+  local key="$1"
+
+  # Must be 44 characters (32 bytes base64 encoded)
+  if [[ ${#key} -ne 44 ]]; then
+    return 1
+  fi
+
+  # Must end with = (base64 padding)
+  if [[ ! "$key" =~ =$ ]]; then
+    return 1
+  fi
+
+  # Must be valid base64 characters
+  if [[ ! "$key" =~ ^[A-Za-z0-9+/]+=$ ]]; then
+    return 1
+  fi
+
+  # Must not be all asterisks (sanitized key)
+  if [[ "$key" =~ ^\*+$ ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+# Save provider credentials securely
+save_provider_credentials() {
+  local provider="$1"
+  local private_key="$2"
+  local address="$3"
+
+  local creds_file="$PROVIDERS_DIR/${provider}.conf"
+
+  # Create credentials file
+  cat > "$creds_file" << EOF
+# LazyVPN Provider Credentials
+# Provider: ${SUPPORTED_PROVIDERS[$provider]}
+# Generated: $(date -Iseconds)
+#
+# WARNING: This file contains your VPN private key.
+# Keep it secure and do not share it.
+
+PROVIDER=$provider
+PROVIDER_NAME=${SUPPORTED_PROVIDERS[$provider]}
+PRIVATE_KEY=$private_key
+ADDRESS=$address
+EOF
+
+  # Secure permissions (owner read-only)
+  chmod 600 "$creds_file"
+
+  return 0
+}
+
+# Main setup flow
+echo "════════════════════════════════════════════════════════════"
+echo "  LazyVPN Provider Setup"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+echo "This will configure a VPN provider using a single WireGuard"
+echo "config file. Your private key will be extracted and used to"
+echo "connect to any server from this provider."
+echo ""
+echo "Supported providers:"
+for key in "${!SUPPORTED_PROVIDERS[@]}"; do
+  # Check if already configured
+  if [[ -f "$PROVIDERS_DIR/${key}.conf" ]]; then
+    echo "  • ${SUPPORTED_PROVIDERS[$key]} (configured)"
+  else
+    echo "  • ${SUPPORTED_PROVIDERS[$key]}"
+  fi
+done
+echo ""
+
+# Check command line argument first
+if [[ -n "$1" ]] && [[ -f "$1" ]]; then
+  CONFIG_FILE="$1"
+  echo "Using provided config file: $CONFIG_FILE"
+else
+  # Find .conf files in Downloads
+  conf_files=$(find "$DOWNLOADS_DIR" -maxdepth 1 -type f -name "*.conf" 2>/dev/null)
+
+  if [[ -z "$conf_files" ]]; then
+    echo "No .conf files found in Downloads folder."
+    echo ""
+    echo "Please download a WireGuard config from your VPN provider:"
+    echo "  • ProtonVPN: https://account.protonvpn.com/downloads#wireguard-configuration"
+    echo "  • Mullvad: https://mullvad.net/account/wireguard-config"
+    echo "  • IVPN: https://www.ivpn.net/account/wireguard-config"
+    echo ""
+    exit 1
+  fi
+
+  echo "Select a WireGuard config file:"
+  echo ""
+
+  # Use fzf if available, otherwise simple select
+  if command -v fzf &>/dev/null; then
+    CONFIG_FILE=$(echo "$conf_files" | fzf --prompt="Select config: " --height=40% --preview="head -20 {}")
+  else
+    select conf in $conf_files; do
+      CONFIG_FILE="$conf"
+      break
+    done
+  fi
+
+  if [[ -z "$CONFIG_FILE" ]]; then
+    echo "No config selected. Exiting."
+    exit 0
+  fi
+fi
+
+echo ""
+echo "Analyzing config file..."
+echo ""
+
+# Validate config has required sections
+if ! grep -q "\[Interface\]" "$CONFIG_FILE" || ! grep -q "\[Peer\]" "$CONFIG_FILE"; then
+  error "Invalid WireGuard config (missing [Interface] or [Peer] section)"
+fi
+
+# Extract private key
+PRIVATE_KEY=$(parse_wg_value "PrivateKey" "$CONFIG_FILE")
+
+if [[ -z "$PRIVATE_KEY" ]]; then
+  error "Could not find PrivateKey in config file"
+fi
+
+# Validate private key
+if ! validate_private_key "$PRIVATE_KEY"; then
+  echo "Error: Invalid or sanitized private key detected."
+  echo ""
+  echo "The private key appears to be:"
+  if [[ "$PRIVATE_KEY" =~ ^\*+$ ]]; then
+    echo "  Sanitized (replaced with asterisks)"
+    echo ""
+    echo "This can happen when re-downloading an existing config from"
+    echo "your VPN provider. Try generating a NEW WireGuard config."
+  else
+    echo "  Malformed (wrong length or invalid characters)"
+    echo ""
+    echo "Expected: 44 characters, base64 encoded, ending with ="
+    echo "Got: ${#PRIVATE_KEY} characters"
+  fi
+  exit 1
+fi
+
+# Extract address (internal VPN IP)
+ADDRESS=$(parse_wg_value "Address" "$CONFIG_FILE")
+
+if [[ -z "$ADDRESS" ]]; then
+  warn "Could not find Address in config file (will use provider default)"
+fi
+
+# Detect provider
+PROVIDER=$(detect_provider "$CONFIG_FILE")
+
+if [[ -z "$PROVIDER" ]]; then
+  echo "Could not auto-detect provider."
+  echo ""
+  echo "Please select your VPN provider:"
+
+  providers_list=""
+  for key in "${!SUPPORTED_PROVIDERS[@]}"; do
+    providers_list+="${SUPPORTED_PROVIDERS[$key]}\n"
+  done
+
+  if command -v fzf &>/dev/null; then
+    selected=$(echo -e "$providers_list" | fzf --prompt="Provider: " --height=40%)
+  else
+    select p in "${SUPPORTED_PROVIDERS[@]}"; do
+      selected="$p"
+      break
+    done
+  fi
+
+  # Map display name back to key
+  for key in "${!SUPPORTED_PROVIDERS[@]}"; do
+    if [[ "${SUPPORTED_PROVIDERS[$key]}" == "$selected" ]]; then
+      PROVIDER="$key"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$PROVIDER" ]] || [[ -z "${SUPPORTED_PROVIDERS[$PROVIDER]}" ]]; then
+  error "Invalid or unsupported provider"
+fi
+
+PROVIDER_NAME="${SUPPORTED_PROVIDERS[$PROVIDER]}"
+
+echo "  Provider: $PROVIDER_NAME"
+echo "  Private Key: ${PRIVATE_KEY:0:8}...${PRIVATE_KEY: -4} (verified)"
+echo "  Address: ${ADDRESS:-"(will use default)"}"
+echo ""
+
+# Check if provider is already configured
+if [[ -f "$PROVIDERS_DIR/${PROVIDER}.conf" ]]; then
+  echo "WARNING: $PROVIDER_NAME is already configured."
+  echo ""
+  read -rp "Overwrite existing configuration? [y/N]: " overwrite
+  if [[ ! "$overwrite" =~ ^[Yy]$ ]]; then
+    echo "Setup cancelled."
+    exit 0
+  fi
+fi
+
+# Save credentials
+echo "Saving credentials..."
+if save_provider_credentials "$PROVIDER" "$PRIVATE_KEY" "$ADDRESS"; then
+  echo ""
+  echo "════════════════════════════════════════════════════════════"
+  echo "  Setup Complete"
+  echo "════════════════════════════════════════════════════════════"
+  echo ""
+  echo "$PROVIDER_NAME has been configured successfully."
+  echo ""
+  echo "You can now:"
+  echo "  • Browse all $PROVIDER_NAME servers from the menu"
+  echo "  • Connect to any server without downloading individual configs"
+  echo ""
+
+  # Offer to delete the source config
+  echo "────────────────────────────────────────────────────────────"
+  echo "Cleanup"
+  echo ""
+  echo "Would you like to securely delete the source config file?"
+  echo "  $CONFIG_FILE"
+  echo ""
+  echo "Your credentials are now stored in LazyVPN."
+  read -rp "Delete source config? [y/N]: " delete_source
+
+  if [[ "$delete_source" =~ ^[Yy]$ ]]; then
+    if shred -u "$CONFIG_FILE" 2>/dev/null; then
+      echo "Securely deleted: $(basename "$CONFIG_FILE")"
+    else
+      rm -f "$CONFIG_FILE"
+      echo "Deleted: $(basename "$CONFIG_FILE")"
+    fi
+  else
+    echo "Source config kept."
+  fi
+
+  # Fetch server list
+  echo ""
+  echo "────────────────────────────────────────────────────────────"
+  read -rp "Fetch $PROVIDER_NAME server list now? [Y/n]: " fetch_now
+
+  if [[ ! "$fetch_now" =~ ^[Nn]$ ]]; then
+    "$SCRIPT_DIR/lazyvpn-fetch-servers" "$PROVIDER"
+  fi
+else
+  error "Failed to save provider credentials"
+fi

@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# Test latency of the currently connected VPN server
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+WG_DIR="$CONFIG_DIR/wireguard"
+CACHE_DIR="$CONFIG_DIR/cache"
+
+clear
+
+# Load config
+load_config "$CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+# Check if connected
+if ! is_connected "$CONN_NAME"; then
+  echo "Not connected to VPN."
+  exit 1
+fi
+
+# Get server name
+server_name="${LAST_CONNECTED_SERVER:-}"
+if [[ -z "$server_name" ]]; then
+  echo "Could not determine current server."
+  exit 1
+fi
+
+# Get endpoint based on server type
+if [[ "$server_name" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+  # Dynamic server - get endpoint from cache
+  provider="${BASH_REMATCH[1]}"
+  server_id="${BASH_REMATCH[2]}"
+  display_name="$server_id"
+
+  cache_file="$CACHE_DIR/${provider}_servers.json"
+  if [[ -f "$cache_file" ]]; then
+    endpoint=$(jq -r --arg name "$server_id" '.[] | select(.server_name == $name) | .ips[0] // empty' "$cache_file" 2>/dev/null)
+  fi
+else
+  # Manual server - get endpoint from config file
+  display_name="$server_name"
+  conf_file="$WG_DIR/${server_name}.conf"
+
+  if [[ -f "$conf_file" ]]; then
+    endpoint=$(grep -i "^Endpoint" "$conf_file" | head -n1 | sed 's/^[^=]*=\s*//' | cut -d: -f1 | tr -d '[:space:]')
+  fi
+fi
+
+if [[ -z "$endpoint" ]]; then
+  echo "Could not determine server endpoint."
+  exit 1
+fi
+
+echo ""
+echo "Testing latency to: $display_name"
+echo "Endpoint: $endpoint"
+echo ""
+
+# Ping the server (5 packets) - show output in real-time
+ping_output=$(LC_ALL=C ping -c 5 -W 2 "$endpoint" 2>/dev/null | tee /dev/stderr)
+
+if [[ -z "$ping_output" ]]; then
+  echo "Server did not respond to ping (timeout)"
+  exit 1
+fi
+echo ""
+
+# Parse results
+avg_latency=$(echo "$ping_output" | awk '/^rtt/ {split($4,a,"/"); print a[2]}')
+min_latency=$(echo "$ping_output" | awk '/^rtt/ {split($4,a,"/"); print a[1]}')
+max_latency=$(echo "$ping_output" | awk '/^rtt/ {split($4,a,"/"); print a[3]}')
+packet_loss=$(echo "$ping_output" | grep -oP '\d+(?=% packet loss)')
+
+echo "Results:"
+echo "  Average: ${avg_latency}ms"
+echo "  Min:     ${min_latency}ms"
+echo "  Max:     ${max_latency}ms"
+echo "  Loss:    ${packet_loss}%"
+echo ""
+read -r -p "Press Enter to continue..."

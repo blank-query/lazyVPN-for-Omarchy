@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # Connect to the quickest (lowest latency) server
+# Supports both manual configs and dynamic server list
+# Uses batched parallel testing to avoid overwhelming the system
 
 # Source common functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,6 +12,11 @@ source "$SCRIPT_DIR/lazyvpn-common" || exit 1
 CONFIG_DIR="$HOME/.config/lazyvpn"
 CONFIG_FILE="$CONFIG_DIR/config"
 WG_DIR="$CONFIG_DIR/wireguard"
+CACHE_DIR="$CONFIG_DIR/cache"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
+
+# Batch size for parallel testing
+BATCH_SIZE=50
 
 # Check if killswitch is active and we're disconnected
 load_config "$CONFIG_FILE"
@@ -36,13 +43,42 @@ EOF
   exit 0
 fi
 
-if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-  notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
-  echo "Error: No WireGuard configurations found in $WG_DIR"
+# Build list of all servers with IPs
+# Format: "type:identifier:ip" where type is "manual" or "dynamic:provider"
+declare -a SERVERS=()
+
+# Add manual configs
+if [[ -d "$WG_DIR" ]]; then
+  for conf in "$WG_DIR"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    server_name=$(basename "$conf" .conf)
+    endpoint=$(grep -m1 "^Endpoint" "$conf" | cut -d= -f2 | tr -d ' ')
+    server_ip=$(echo "$endpoint" | cut -d: -f1)
+    [[ -n "$server_ip" ]] && SERVERS+=("manual:$server_name:$server_ip")
+  done
+fi
+
+# Add dynamic servers from all configured providers
+for provider_file in "$PROVIDERS_DIR"/*.conf; do
+  [[ -f "$provider_file" ]] || continue
+  provider=$(basename "$provider_file" .conf)
+  cache_file="$CACHE_DIR/${provider}_servers.json"
+
+  if [[ -f "$cache_file" ]] && command -v jaq &>/dev/null; then
+    while IFS=$'\t' read -r server_name server_ip; do
+      [[ -n "$server_ip" && -n "$server_name" ]] && SERVERS+=("dynamic:$provider:$server_name:$server_ip")
+    done < <(jaq -r '.[] | [(.server_name // .hostname), .ips[0]] | @tsv' "$cache_file" 2>/dev/null)
+  fi
+done
+
+if [[ ${#SERVERS[@]} -eq 0 ]]; then
+  notify "No VPN servers found.\nSet up a provider or import configs manually."
+  echo "Error: No VPN servers found"
   exit 1
 fi
 
-echo "Testing server latency (parallel)..."
+TOTAL_SERVERS=${#SERVERS[@]}
+echo "Testing $TOTAL_SERVERS servers in batches of $BATCH_SIZE..."
 echo ""
 
 RESULTS_DIR=$(mktemp -d)
@@ -50,59 +86,85 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 
 # Test a single server (runs in background)
 test_server() {
-  local conf="$1"
+  local server_entry="$1"
   local results_dir="$2"
 
-  local filename
-  filename=$(basename "$conf" .conf)
-  local result_file="$results_dir/$filename"
+  # Parse entry - handle both manual:name:ip and dynamic:provider:name:ip
+  local server_ip server_id
+  if [[ "$server_entry" =~ ^manual:([^:]+):(.+)$ ]]; then
+    server_id="manual:${BASH_REMATCH[1]}"
+    server_ip="${BASH_REMATCH[2]}"
+  elif [[ "$server_entry" =~ ^dynamic:([^:]+):([^:]+):(.+)$ ]]; then
+    server_id="dynamic:${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+    server_ip="${BASH_REMATCH[3]}"
+  else
+    return
+  fi
 
-  # Extract endpoint IP
-  local endpoint
-  endpoint=$(grep -m1 "^Endpoint" "$conf" | cut -d= -f2 | tr -d ' ')
-  local server_ip
-  server_ip=$(echo "$endpoint" | cut -d: -f1)
+  # Create safe filename for result
+  local safe_id
+  safe_id=$(echo "$server_id" | tr ':/' '__')
+  local result_file="$results_dir/$safe_id"
 
-  # Ping the server (3 packets, 2 second timeout)
+  # Ping the server (2 packets, 2 second timeout for speed)
   local avg_latency
-  avg_latency=$(LC_ALL=C ping -c 3 -W 2 "$server_ip" 2>/dev/null | awk '/^rtt/ {split($4,a,"/"); print int(a[2])}')
+  avg_latency=$(LC_ALL=C ping -c 2 -W 2 "$server_ip" 2>/dev/null | awk '/^rtt/ {split($4,a,"/"); print int(a[2])}')
 
   if [[ -n "$avg_latency" ]] && [[ "$avg_latency" =~ ^[0-9]+$ ]]; then
-    echo "${avg_latency}" > "$result_file"
-    echo "✓ $filename: ${avg_latency}ms"
-  else
-    echo "✗ $filename: timeout"
+    echo "$server_id:$avg_latency" > "$result_file"
   fi
 }
 
-# Launch all tests in parallel
-for conf in "$WG_DIR"/*.conf; do
-  [[ -f "$conf" ]] || continue
-  test_server "$conf" "$RESULTS_DIR" &
-done
-
-# Wait for all background jobs with timeout
-wait
-
-echo ""
-
-# Find the best server from results
+# Process servers in batches
 BEST_SERVER=""
 BEST_LATENCY=99999
+TESTED=0
+REACHABLE=0
 
-for result_file in "$RESULTS_DIR"/*; do
-  [[ -f "$result_file" ]] || continue
+for (( i=0; i<TOTAL_SERVERS; i+=BATCH_SIZE )); do
+  batch_end=$((i + BATCH_SIZE))
+  [[ $batch_end -gt $TOTAL_SERVERS ]] && batch_end=$TOTAL_SERVERS
 
-  filename=$(basename "$result_file")
-  latency=$(cat "$result_file")
+  batch_num=$(( (i / BATCH_SIZE) + 1 ))
+  total_batches=$(( (TOTAL_SERVERS + BATCH_SIZE - 1) / BATCH_SIZE ))
+  printf "\rBatch %d/%d (servers %d-%d)..." "$batch_num" "$total_batches" "$((i+1))" "$batch_end"
 
-  if [[ -n "$latency" ]] && [[ "$latency" =~ ^[0-9]+$ ]]; then
-    if (( latency < BEST_LATENCY )); then
-      BEST_LATENCY=$latency
-      BEST_SERVER=$filename
+  # Launch batch in parallel
+  for (( j=i; j<batch_end; j++ )); do
+    test_server "${SERVERS[$j]}" "$RESULTS_DIR" &
+  done
+
+  # Wait for batch to complete
+  wait
+
+  # Check results from this batch
+  for result_file in "$RESULTS_DIR"/*; do
+    [[ -f "$result_file" ]] || continue
+
+    IFS=':' read -r type rest < "$result_file"
+    content=$(cat "$result_file")
+
+    # Parse result - last field is latency
+    latency="${content##*:}"
+    server_id="${content%:*}"
+
+    if [[ -n "$latency" ]] && [[ "$latency" =~ ^[0-9]+$ ]]; then
+      ((REACHABLE++))
+      if (( latency < BEST_LATENCY )); then
+        BEST_LATENCY=$latency
+        BEST_SERVER="$server_id"
+      fi
     fi
-  fi
+
+    rm -f "$result_file"
+  done
+
+  TESTED=$batch_end
 done
+
+echo ""
+echo ""
+echo "Tested: $TESTED servers, Reachable: $REACHABLE"
 
 if [[ -z "$BEST_SERVER" ]]; then
   notify "Could not reach any servers. Check your internet connection."
@@ -110,13 +172,19 @@ if [[ -z "$BEST_SERVER" ]]; then
   exit 1
 fi
 
-# Get pretty server name
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PRETTY_NAME=$(get_pretty_server_name "$BEST_SERVER" "$SCRIPT_DIR")
-
-# Display result
-echo "Lowest latency server: $PRETTY_NAME - ${BEST_LATENCY}ms"
 echo ""
 
-# Connect to the best server
-exec "$SCRIPT_DIR/lazyvpn-connect" "$BEST_SERVER"
+# Connect based on type
+if [[ "$BEST_SERVER" =~ ^manual:(.+)$ ]]; then
+  SERVER="${BASH_REMATCH[1]}"
+  PRETTY_NAME=$(get_pretty_server_name "$SERVER" "$SCRIPT_DIR")
+  echo "Lowest latency: $PRETTY_NAME - ${BEST_LATENCY}ms"
+  echo ""
+  exec "$SCRIPT_DIR/lazyvpn-connect" "$SERVER"
+elif [[ "$BEST_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+  PROVIDER="${BASH_REMATCH[1]}"
+  SERVER="${BASH_REMATCH[2]}"
+  echo "Lowest latency: $SERVER ($PROVIDER) - ${BEST_LATENCY}ms"
+  echo ""
+  exec "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER"
+fi

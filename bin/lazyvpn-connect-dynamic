@@ -1,0 +1,352 @@
+#!/bin/bash
+
+# Connect to a dynamic VPN server using cached server data and stored credentials
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CACHE_DIR="$CONFIG_DIR/cache"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
+WG_DIR="$CONFIG_DIR/wireguard"
+USER_CONFIG_FILE="$CONFIG_DIR/config"
+
+# Check for jq
+if ! command -v jq &>/dev/null; then
+  error "jq is required but not installed. Install with: sudo pacman -S jq"
+fi
+
+# Provider-specific defaults
+declare -A PROVIDER_DNS=(
+  [protonvpn]="10.2.0.1"
+  [mullvad]="10.64.0.1"
+  [ivpn]="172.16.0.1"
+  [pia]="10.0.0.241"
+  [nordvpn]="103.86.96.100"
+  [surfshark]="162.252.172.57"
+  [windscribe]="10.255.255.1"
+)
+
+declare -A PROVIDER_PORT=(
+  [protonvpn]="51820"
+  [mullvad]="51820"
+  [ivpn]="2049"
+  [pia]="1337"
+  [nordvpn]="51820"
+  [surfshark]="51820"
+  [windscribe]="443"
+)
+
+# Usage
+if [[ -z "$1" ]] || [[ -z "$2" ]]; then
+  echo "Usage: lazyvpn-connect-dynamic PROVIDER SERVER_NAME"
+  echo ""
+  echo "Connect to a dynamic server using stored credentials."
+  echo ""
+  echo "Example:"
+  echo "  lazyvpn-connect-dynamic protonvpn US-NY#42"
+  exit 1
+fi
+
+PROVIDER="$1"
+SERVER_NAME="$2"
+
+# Validate provider
+if [[ ! -f "$PROVIDERS_DIR/${PROVIDER}.conf" ]]; then
+  error "Provider not configured: $PROVIDER. Run lazyvpn-provider-setup first."
+fi
+
+# Load provider credentials
+source "$PROVIDERS_DIR/${PROVIDER}.conf" || error "Failed to load provider credentials"
+
+if [[ -z "$PRIVATE_KEY" ]]; then
+  error "No private key found in provider credentials"
+fi
+
+# Load server data from cache
+CACHE_FILE="$CACHE_DIR/${PROVIDER}_servers.json"
+
+if [[ ! -f "$CACHE_FILE" ]]; then
+  error "Server cache not found. Run: lazyvpn-fetch-servers $PROVIDER"
+fi
+
+# Find server in cache
+SERVER_JSON=$(jq --arg name "$SERVER_NAME" '.[] | select(.server_name == $name)' "$CACHE_FILE" 2>/dev/null)
+
+if [[ -z "$SERVER_JSON" ]] || [[ "$SERVER_JSON" == "null" ]]; then
+  error "Server not found in cache: $SERVER_NAME"
+fi
+
+# Extract server details
+PUBLIC_KEY=$(echo "$SERVER_JSON" | jq -r '.wgpubkey // empty')
+SERVER_IP=$(echo "$SERVER_JSON" | jq -r '.ips[0] // empty')
+HOSTNAME=$(echo "$SERVER_JSON" | jq -r '.hostname // empty')
+COUNTRY=$(echo "$SERVER_JSON" | jq -r '.country // "Unknown"')
+CITY=$(echo "$SERVER_JSON" | jq -r '.city // ""')
+
+# Feature flags for display
+PORT_FORWARD=$(echo "$SERVER_JSON" | jq -r '.port_forward // false')
+TOR=$(echo "$SERVER_JSON" | jq -r '.tor // false')
+SECURE_CORE=$(echo "$SERVER_JSON" | jq -r '.secure_core // false')
+STREAM=$(echo "$SERVER_JSON" | jq -r '.stream // false')
+FREE=$(echo "$SERVER_JSON" | jq -r '.free // false')
+
+if [[ -z "$PUBLIC_KEY" ]] || [[ -z "$SERVER_IP" ]]; then
+  error "Server data incomplete (missing public key or IP)"
+fi
+
+# Get provider defaults
+DNS="${PROVIDER_DNS[$PROVIDER]:-10.2.0.1}"
+PORT="${PROVIDER_PORT[$PROVIDER]:-51820}"
+
+# Use stored address or provider default
+if [[ -z "$ADDRESS" ]]; then
+  # Generate a default address (this might need adjustment per provider)
+  ADDRESS="10.2.0.2/32"
+fi
+
+# Build feature string for display
+FEATURES=""
+[[ "$PORT_FORWARD" == "true" ]] && FEATURES+="🔄"
+[[ "$TOR" == "true" ]] && FEATURES+="🧅"
+[[ "$SECURE_CORE" == "true" ]] && FEATURES+="🔒"
+[[ "$STREAM" == "true" ]] && FEATURES+="📺"
+[[ "$FREE" == "true" ]] && FEATURES+="🤡"
+
+# Build display name
+DISPLAY_NAME="$COUNTRY"
+[[ -n "$CITY" ]] && DISPLAY_NAME+=" - $CITY"
+DISPLAY_NAME+=" ($SERVER_NAME)"
+[[ -n "$FEATURES" ]] && DISPLAY_NAME+=" $FEATURES"
+
+info "Connecting to $DISPLAY_NAME"
+echo ""
+
+# Load user configuration
+load_config "$USER_CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+# Validate CONNECTION_NAME
+if [[ ! "$CONN_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  error "Invalid CONNECTION_NAME in config"
+fi
+
+# Check current connection
+if is_connected "$CONN_NAME"; then
+  info "Disconnecting from current server..."
+  sudo ip link delete "$CONN_NAME" 2>/dev/null || true
+fi
+
+# Show current public IP
+info "Checking current public IP..."
+CURRENT_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+if [[ -n "$CURRENT_IP" ]]; then
+  info "Current IP: $CURRENT_IP"
+else
+  info "Current IP: Unable to retrieve"
+fi
+echo ""
+
+# Update killswitch if active
+load_config "$USER_CONFIG_FILE"
+if [[ "${KILLSWITCH:-false}" == "true" ]]; then
+  info "Updating killswitch rules for new server endpoint..."
+  # Create a temporary server name for killswitch update
+  # The update script needs the endpoint IP
+  if "$SCRIPT_DIR/lazyvpn-update-killswitch" --endpoint "$SERVER_IP"; then
+    info "Killswitch rules updated"
+  else
+    warn "Failed to update killswitch rules"
+  fi
+  echo ""
+fi
+
+# Generate WireGuard config
+info "Generating WireGuard configuration..."
+
+# Endpoint can be hostname or IP with port
+ENDPOINT="${SERVER_IP}:${PORT}"
+
+# AllowedIPs - route all traffic through VPN
+ALLOWED_IPS="0.0.0.0/0,::/0"
+
+# Create the .netdev file using secure file helper
+info "Creating netdev file..."
+
+cat << EOF | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-netdev "$CONN_NAME"
+[NetDev]
+Name=$CONN_NAME
+Kind=wireguard
+Description=WireGuard VPN tunnel (dynamic)
+
+[WireGuard]
+PrivateKey=$PRIVATE_KEY
+
+[WireGuardPeer]
+PublicKey=$PUBLIC_KEY
+AllowedIPs=$ALLOWED_IPS
+Endpoint=$ENDPOINT
+PersistentKeepalive=25
+EOF
+
+# Create the .network file
+info "Creating network file..."
+
+cat << EOF | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-network "$CONN_NAME"
+[Match]
+Name=$CONN_NAME
+
+[Network]
+Address=$ADDRESS
+DNS=$DNS
+DNSDefaultRoute=true
+Domains=~.
+EOF
+
+# Restart systemd-networkd
+info "Restarting systemd-networkd..."
+sudo systemctl restart systemd-networkd
+
+sleep 1
+
+# Bring up the interface
+info "Connecting to $SERVER_NAME..."
+if ! sudo networkctl up "$CONN_NAME"; then
+  error "Failed to bring up VPN interface"
+fi
+
+sleep 2
+
+# Configure routes
+info "Configuring routes..."
+
+# Get current default gateway
+DEFAULT_GW=$(ip route show default | awk '/default/ {print $3}' | head -n1)
+DEFAULT_DEV=$(ip route show default | awk '/default/ {print $5}' | head -n1)
+
+if [[ -n "$DEFAULT_GW" ]] && [[ -n "$SERVER_IP" ]]; then
+  # Add specific route to VPN endpoint through original gateway
+  sudo ip route add "$SERVER_IP/32" via "$DEFAULT_GW" dev "$DEFAULT_DEV" 2>/dev/null || true
+fi
+
+# Add default route through VPN
+sudo ip route add default dev "$CONN_NAME" metric 100 2>/dev/null || warn "Route configuration may need adjustment"
+
+echo ""
+info "Verifying connection..."
+
+# Verify connectivity
+PING_SUCCESS=false
+for attempt in 1 2 3 4 5; do
+  if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+    PING_SUCCESS=true
+    break
+  fi
+  [[ $attempt -lt 5 ]] && sleep 1
+done
+
+# Cleanup function
+cleanup_failed_connection() {
+  echo ""
+  info "Cleaning up failed connection..."
+  sudo networkctl down "$CONN_NAME" 2>/dev/null || true
+  sudo "$SCRIPT_DIR/lazyvpn-file-helper" remove "$CONN_NAME" >/dev/null 2>&1 || true
+  sudo systemctl restart systemd-networkd
+}
+
+CONNECTION_FAILED=false
+FAILURE_REASON=""
+
+if [[ "$PING_SUCCESS" != "true" ]]; then
+  CONNECTION_FAILED=true
+  FAILURE_REASON="No internet access detected"
+else
+  PUBLIC_IP=$(curl -4 -s --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null)
+
+  if [[ -z "$CURRENT_IP" ]]; then
+    if [[ -z "$PUBLIC_IP" ]]; then
+      CONNECTION_FAILED=true
+      FAILURE_REASON="Unable to retrieve public IP"
+    else
+      info "Public IPv4: $PUBLIC_IP"
+    fi
+  elif [[ -z "$PUBLIC_IP" ]]; then
+    CONNECTION_FAILED=true
+    FAILURE_REASON="Lost ability to retrieve public IP"
+  elif [[ "$PUBLIC_IP" == "$CURRENT_IP" ]]; then
+    CONNECTION_FAILED=true
+    FAILURE_REASON="Traffic not routing through VPN (IP unchanged)"
+  else
+    info "Public IPv4: $PUBLIC_IP"
+    info "IP verification passed"
+  fi
+fi
+
+if [[ "$CONNECTION_FAILED" == "true" ]]; then
+  echo ""
+  echo "Error: Connection failed - $FAILURE_REASON"
+  cleanup_failed_connection
+
+  echo ""
+  read -r -p "Retry connection? [Y/n] " retry_response
+  if [[ ! "$retry_response" =~ ^[Nn]$ ]]; then
+    exec "$0" "$PROVIDER" "$SERVER_NAME"
+  fi
+  exit 1
+fi
+
+# IPv6 check
+load_config "$USER_CONFIG_FILE"
+if [[ "${DISABLE_IPV6:-true}" == "true" ]]; then
+  PUBLIC_IPV6=$(curl -6 -s --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null)
+  if [[ -n "$PUBLIC_IPV6" ]]; then
+    warn "IPv6 leak detected: $PUBLIC_IPV6"
+  else
+    info "IPv6 properly disabled/blocked"
+  fi
+fi
+
+# DNS check
+if command -v resolvectl &>/dev/null; then
+  ACTIVE_DNS=$(resolvectl status "$CONN_NAME" 2>/dev/null | grep "DNS Servers" | awk '{print $3}')
+  if [[ -n "$ACTIVE_DNS" ]]; then
+    if [[ "$ACTIVE_DNS" == "$DNS" ]]; then
+      info "DNS: $ACTIVE_DNS (via VPN)"
+    else
+      warn "DNS mismatch - Expected: $DNS, Active: $ACTIVE_DNS"
+    fi
+  fi
+fi
+
+echo ""
+info "Successfully connected to $DISPLAY_NAME"
+
+# Notification
+omarchy-notification-dismiss "LazyVPN" 2>/dev/null || true
+notify-send "󰖂 VPN Connected" "$DISPLAY_NAME" -t 3000
+
+# Save last connected server (use dynamic: prefix to indicate it's a dynamic server)
+if ! atomic_config_update "LAST_CONNECTED_SERVER" "dynamic:${PROVIDER}:${SERVER_NAME}" "$USER_CONFIG_FILE"; then
+  warn "Failed to save server to config"
+fi
+
+# Post-connection options
+echo ""
+echo "[Enter] Done  [d] DNS Leak Test  [s] Speedtest  [l] Latency"
+read -r -n 1 key
+echo ""
+case "$key" in
+  d|D)
+    xdg-open "https://ipleak.net" &>/dev/null &
+    echo "Opening ipleak.net in browser..."
+    sleep 1
+    ;;
+  s|S)
+    "$SCRIPT_DIR/lazyvpn-speedtest-current"
+    ;;
+  l|L)
+    "$SCRIPT_DIR/lazyvpn-latency-current"
+    ;;
+esac

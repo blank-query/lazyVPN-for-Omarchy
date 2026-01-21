@@ -114,6 +114,24 @@ if ! command -v dig &>/dev/null; then
   sudo pacman -S --noconfirm --needed bind-tools
 fi
 
+# Check if jq is installed (required for dynamic server list)
+if ! command -v jq &>/dev/null; then
+  echo "Installing jq (required for dynamic server list feature)..."
+  sudo pacman -S --noconfirm --needed jq
+fi
+
+# Check if fzf is installed (required for server selection)
+if ! command -v fzf &>/dev/null; then
+  echo "Installing fzf (required for server selection)..."
+  sudo pacman -S --noconfirm --needed fzf
+fi
+
+# Check if jaq is installed (required for fast server list processing)
+if ! command -v jaq &>/dev/null; then
+  echo "Installing jaq (required for fast server list processing)..."
+  sudo pacman -S --noconfirm --needed jaq
+fi
+
 # Mark that installation has started
 INSTALL_STARTED=true
 
@@ -401,20 +419,28 @@ echo "==================================="
 echo "Installation Complete!"
 echo "==================================="
 echo ""
-echo "Next steps:"
-echo "1. Download WireGuard configs from your VPN provider"
-echo "2. Place .conf files in: $HOME/.config/lazyvpn/wireguard/"
-echo "3. Press SUPER+ALT+SPACE and select 'LazyVPN'"
+echo "Getting Started (Choose ONE method):"
 echo ""
-echo "Compatible with any WireGuard VPN provider:"
+echo "OPTION A - Dynamic Server List (Recommended):"
+echo "  1. Download ONE WireGuard config from your VPN provider"
+echo "  2. Open LazyVPN menu (SUPER+L or SUPER+ALT+SPACE → LazyVPN)"
+echo "  3. Go to Options → Setup Provider"
+echo "  4. Select your config file - LazyVPN extracts your credentials"
+echo "  5. Browse ALL servers without downloading individual configs!"
+echo ""
+echo "OPTION B - Manual Config Import:"
+echo "  1. Download individual WireGuard configs from your VPN provider"
+echo "  2. Open LazyVPN menu → Options → Add Manual Server"
+echo "  3. Select configs to import"
+echo ""
+echo "Supported VPN Providers:"
 echo "  - ProtonVPN: https://account.protonvpn.com (Downloads → WireGuard)"
 echo "  - Mullvad: https://mullvad.net/en/account (WireGuard configuration)"
 echo "  - IVPN: https://ivpn.net/account (WireGuard Config Generator)"
-echo "  - Or any custom WireGuard server"
+echo "  - NordVPN, Surfshark, Windscribe, PIA, and more"
 echo ""
-echo "Tips:"
-echo "  - Rename configs for easier identification"
-echo "  - Format: [provider-]CountryCode-City#Number.conf"
-echo "  - Examples: proton-US-NY#1.conf, mullvad-SE-Stockholm#5.conf, US-CA#1.conf"
-echo "  - Provider prefix is optional (detection also works via endpoint/DNS)"
+echo "Keyboard Shortcuts:"
+echo "  - SUPER+L         Open LazyVPN menu"
+echo "  - SUPER+ALT+SPACE Omarchy menu → LazyVPN"
+echo ""
 omarchy-show-done

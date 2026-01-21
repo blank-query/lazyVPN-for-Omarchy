@@ -47,33 +47,6 @@ if ! iptables -L LAZYVPN_OUT -n &>/dev/null; then
   fi
 fi
 
-# Get server name from argument or config
-if [[ -n "$1" ]]; then
-  # Server name passed as argument (for pre-connection killswitch updates)
-  LAST_CONNECTED_SERVER="$1"
-else
-  # No argument - read from config (existing behavior)
-  LAST_CONNECTED_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$USER_CONFIG_FILE" | cut -d= -f2)
-fi
-
-if [[ -z "$LAST_CONNECTED_SERVER" ]]; then
-  # Run notify-send as the original user (not root)
-  if [[ -n "$SUDO_USER" ]]; then
-    sudo -u "$SUDO_USER" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$SUDO_USER")/bus notify-send "LazyVPN" "Cannot update killswitch: No server connection found."
-  fi
-  error "No LAST_CONNECTED_SERVER set in config"
-fi
-
-VPN_CONFIG_FILE="$WG_DIR/${LAST_CONNECTED_SERVER}.conf"
-
-if [[ ! -f "$VPN_CONFIG_FILE" ]]; then
-  # Run notify-send as the original user (not root)
-  if [[ -n "$SUDO_USER" ]]; then
-    sudo -u "$SUDO_USER" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$SUDO_USER")/bus notify-send "LazyVPN" "Cannot update killswitch: Server config not found."
-  fi
-  error "Last connected server config not found: $VPN_CONFIG_FILE"
-fi
-
 # Helper function to parse config values robustly
 parse_wg_value() {
   local key="$1"
@@ -82,9 +55,89 @@ parse_wg_value() {
   grep -i "^${key}" "$file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r'
 }
 
-# Extract DNS and endpoint from config
-NEW_DNS=$(parse_wg_value "DNS" "$VPN_CONFIG_FILE" | cut -d',' -f1)
-NEW_ENDPOINT=$(parse_wg_value "Endpoint" "$VPN_CONFIG_FILE" | cut -d: -f1)
+# Check for direct endpoint flag (for dynamic server connections)
+DIRECT_ENDPOINT=""
+DIRECT_DNS=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --endpoint)
+      DIRECT_ENDPOINT="$2"
+      shift 2
+      ;;
+    --dns)
+      DIRECT_DNS="$2"
+      shift 2
+      ;;
+    *)
+      # Assume it's a server name
+      LAST_CONNECTED_SERVER="$1"
+      shift
+      ;;
+  esac
+done
+
+# If direct endpoint provided, use it directly
+if [[ -n "$DIRECT_ENDPOINT" ]]; then
+  NEW_ENDPOINT="$DIRECT_ENDPOINT"
+  NEW_DNS="${DIRECT_DNS:-10.2.0.1}"  # Default to ProtonVPN DNS
+else
+  # Get server name from argument or config
+  if [[ -z "$LAST_CONNECTED_SERVER" ]]; then
+    # No argument - read from config (existing behavior)
+    LAST_CONNECTED_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$USER_CONFIG_FILE" | cut -d= -f2)
+  fi
+
+  # Handle dynamic server format: "dynamic:provider:server_name"
+  if [[ "$LAST_CONNECTED_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+    PROVIDER="${BASH_REMATCH[1]}"
+    SERVER_NAME="${BASH_REMATCH[2]}"
+
+    # Look up server in cache
+    CACHE_FILE="$REAL_HOME/.config/lazyvpn/cache/${PROVIDER}_servers.json"
+    if [[ -f "$CACHE_FILE" ]] && command -v jq &>/dev/null; then
+      SERVER_JSON=$(jq --arg name "$SERVER_NAME" '.[] | select(.server_name == $name)' "$CACHE_FILE" 2>/dev/null)
+      if [[ -n "$SERVER_JSON" ]]; then
+        NEW_ENDPOINT=$(echo "$SERVER_JSON" | jq -r '.ips[0] // empty')
+        # Use provider-specific DNS
+        case "$PROVIDER" in
+          protonvpn) NEW_DNS="10.2.0.1" ;;
+          mullvad) NEW_DNS="10.64.0.1" ;;
+          ivpn) NEW_DNS="172.16.0.1" ;;
+          pia) NEW_DNS="10.0.0.241" ;;
+          *) NEW_DNS="10.2.0.1" ;;
+        esac
+      fi
+    fi
+
+    if [[ -z "$NEW_ENDPOINT" ]]; then
+      error "Could not find dynamic server in cache: $SERVER_NAME"
+    fi
+  else
+    # Traditional config file based server
+    if [[ -z "$LAST_CONNECTED_SERVER" ]]; then
+      # Run notify-send as the original user (not root)
+      if [[ -n "$SUDO_USER" ]]; then
+        sudo -u "$SUDO_USER" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$SUDO_USER")/bus notify-send "LazyVPN" "Cannot update killswitch: No server connection found."
+      fi
+      error "No LAST_CONNECTED_SERVER set in config"
+    fi
+
+    VPN_CONFIG_FILE="$WG_DIR/${LAST_CONNECTED_SERVER}.conf"
+
+    if [[ ! -f "$VPN_CONFIG_FILE" ]]; then
+      # Run notify-send as the original user (not root)
+      if [[ -n "$SUDO_USER" ]]; then
+        sudo -u "$SUDO_USER" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$SUDO_USER")/bus notify-send "LazyVPN" "Cannot update killswitch: Server config not found."
+      fi
+      error "Last connected server config not found: $VPN_CONFIG_FILE"
+    fi
+
+    # Extract DNS and endpoint from config
+    NEW_DNS=$(parse_wg_value "DNS" "$VPN_CONFIG_FILE" | cut -d',' -f1)
+    NEW_ENDPOINT=$(parse_wg_value "Endpoint" "$VPN_CONFIG_FILE" | cut -d: -f1)
+  fi
+fi
 
 # Flush existing rules
 iptables -F LAZYVPN_OUT

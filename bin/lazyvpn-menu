@@ -4,6 +4,11 @@
 
 export PATH="$HOME/.local/share/lazyvpn/bin:$HOME/.local/share/omarchy/bin:$PATH"
 
+# Prevent multiple instances - exit if already running
+if pgrep -x "lazyvpn-menu" -u "$USER" | grep -qv "^$$\$"; then
+  exit 0
+fi
+
 # Source common functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lazyvpn-common
@@ -79,145 +84,105 @@ country_flag() {
 }
 
 show_main_menu() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
   # Load config to check for last server and settings
   source "$CONFIG_FILE" 2>/dev/null || true
 
-  # Get current status
-  status_output=$("$SCRIPT_DIR/lazyvpn-status")
-  status=$(echo "$status_output" | grep "^status=" | cut -d= -f2)
+  # Get connection name from config
+  local conn_name="${CONNECTION_NAME:-wg0}"
 
-  if [[ "$status" == "connected" ]]; then
-    server=$(echo "$status_output" | grep "^server=" | cut -d= -f2)
-    prompt="LazyVPN - 🟢 $server"
-    disconnect_option="🔌  Disconnect\n"
-    connection_state="🟢"
+  # Check current status using is_connected from lazyvpn-common
+  if is_connected "$conn_name"; then
+    # Get server display from last connected
+    local server_display=""
+    if [[ -n "$LAST_CONNECTED_SERVER" ]]; then
+      if [[ "$LAST_CONNECTED_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+        server_display="${BASH_REMATCH[2]}"
+      else
+        server_display="$LAST_CONNECTED_SERVER"
+      fi
+    else
+      server_display="$conn_name"
+    fi
+    prompt="LazyVPN - 🟢 $server_display"
+
+    # Connected menu: Disconnect, Dynamic Server List, My Servers, Settings
+    local options="🔌  Disconnect\n🌐  Dynamic Server List\n📁  My Servers\n⚙️  Settings"
+
+    case $(menu "$prompt" "$options") in
+      *Disconnect*) show_disconnect_confirm ;;
+      *Dynamic\ Server\ List*) show_dynamic_server_list ;;
+      *My\ Servers*) show_choose_server_menu ;;
+      *Settings*) show_settings ;;
+    esac
   else
     prompt="LazyVPN - 🔴 Disconnected"
-    disconnect_option=""
-    connection_state="🔴"
+
+    # Check if there's a last connected server
+    local last_server_option=""
+    if [[ -n "$LAST_CONNECTED_SERVER" ]]; then
+      if [[ "$LAST_CONNECTED_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+        last_server_display="${BASH_REMATCH[2]}"
+      else
+        last_server_display="$LAST_CONNECTED_SERVER"
+      fi
+      last_server_option="🔄  Reconnect ($last_server_display)\n"
+    fi
+
+    # Disconnected menu: Dynamic Server List, My Servers, Reconnect Last Server, Settings
+    local options="🌐  Dynamic Server List\n📁  My Servers\n${last_server_option}⚙️  Settings"
+
+    case $(menu "$prompt" "$options") in
+      *Dynamic\ Server\ List*) show_dynamic_server_list ;;
+      *My\ Servers*) show_choose_server_menu ;;
+      *Reconnect*) show_last_server ;;
+      *Settings*) show_settings ;;
+    esac
+  fi
+}
+
+show_settings() {
+  # Launch fzf-based settings interface
+  omarchy-launch-floating-terminal-with-presentation lazyvpn-settings
+  # Return to main menu after settings closes (unless uninstalled)
+  [[ -f "$SCRIPT_DIR/lazyvpn-settings" ]] && show_main_menu
+}
+
+show_provider_setup() {
+  omarchy-launch-floating-terminal-with-presentation lazyvpn-provider-setup
+  show_main_menu
+}
+
+show_dynamic_server_list() {
+  # Check if any providers are configured
+  local has_providers=false
+  for provider_file in "$CONFIG_DIR/providers"/*.conf; do
+    if [[ -f "$provider_file" ]]; then
+      has_providers=true
+      break
+    fi
+  done
+
+  if [[ "$has_providers" != "true" ]]; then
+    # Show explanation dialog before redirecting to setup
+    # After setup, return to main menu so user can access dynamic server list
+    case $(menu "No Providers Configured" "🔑  Set up a provider now\n❌  Cancel") in
+      *Set\ up*) show_provider_setup ;;
+      *) show_main_menu ;;
+    esac
+    return
   fi
 
-  # Status indicators
-  killswitch_state=$([ "$KILLSWITCH" == "true" ] && echo "🟢" || echo "🔴")
-  autoconnect_state=$([ "$AUTOCONNECT" == "true" ] && echo "🟢" || echo "🔴")
-
-  local options="${disconnect_option}🔄  Connections $connection_state\n🧪  Tests\n🛡️  Killswitch $killswitch_state\n🔌  Autoconnect $autoconnect_state\n⚙️  Options"
-
-  case $(menu "$prompt" "$options") in
-    *Disconnect*) show_disconnect_confirm ;;
-    *Connections*) show_connections_menu ;;
-    *Tests*) show_tests_menu ;;
-    *Killswitch*) show_killswitch_menu ;;
-    *Autoconnect*) show_autoconnect_menu ;;
-    *Options*) show_options_menu ;;
-  esac
-}
-
-show_options_menu() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Load config for status indicators
-  CONFIG_FILE="$HOME/.config/lazyvpn/config"
-  load_config "$CONFIG_FILE"
-
-  auto_recover_state=$([ "${AUTO_RECOVER:-false}" == "true" ] && echo "🟢" || echo "🔴")
-  auto_failover_state=$([ "${AUTO_FAILOVER:-false}" == "true" ] && echo "🟢" || echo "🔴")
-  ipv6_protection_state=$([ "${DISABLE_IPV6:-true}" == "true" ] && echo "🟢" || echo "🔴")
-  interface_name="${CONNECTION_NAME:-wg0}"
-
-  local options="➕  Add New Server\n➖  Remove Server\n🔁  Auto-Recover $auto_recover_state\n🔀  Auto-Failover $auto_failover_state\n🔒  IPv6 Protection $ipv6_protection_state\n✏️  Rename Interface ($interface_name)\n🗑️  Uninstall LazyVPN"
-
-  case $(menu "Options" "$options") in
-    *Add\ New*) show_add_server_flow ;;
-    *Remove\ Server*) show_remove_server_flow ;;
-    *Auto-Recover*) "$SCRIPT_DIR/lazyvpn-toggle-auto-recover" >/dev/null 2>&1 && show_options_menu ;;
-    *Auto-Failover*) "$SCRIPT_DIR/lazyvpn-toggle-auto-failover" >/dev/null 2>&1 && show_options_menu ;;
-    *IPv6\ Protection*) "$SCRIPT_DIR/lazyvpn-toggle-ipv6-protection" >/dev/null 2>&1 && show_options_menu ;;
-    *Rename\ Interface*) omarchy-launch-floating-terminal-with-presentation lazyvpn-rename-connection ;;
-    *Uninstall*) show_uninstall_confirm ;;
-    *) back_to show_main_menu ;;
-  esac
-}
-
-show_uninstall_confirm() {
-  case $(menu "⚠️  Uninstall LazyVPN?" "❌  Cancel\n✅  Yes, Uninstall") in
-    *Yes*) omarchy-launch-floating-terminal-with-presentation lazyvpn-uninstall ;;
-    *) show_main_menu ;;
-  esac
-}
-
-show_remove_server_flow() {
-  # Check for config changes and show prompt if any (from external changes)
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Launch remove server script in pretty terminal with presentation
-  omarchy-launch-floating-terminal-with-presentation lazyvpn-remove-server
-
-  # Return to options menu (which will check for changes automatically)
-  show_options_menu
-}
-
-show_connections_menu() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Load config to check for last server
-  source "$CONFIG_FILE" 2>/dev/null || true
-
-  # Check if there's a last connected server to show in option
-  if [[ -n "$LAST_CONNECTED_SERVER" ]]; then
-    last_server_option="🔄  Last Server ($LAST_CONNECTED_SERVER)\n"
-  else
-    last_server_option="🔄  Last Server\n"
-  fi
-
-  local options="🌍  Choose Server\n${last_server_option}⚡  Lowest Latency\n🎲  Random Connect"
-
-  case $(menu "Connections" "$options") in
-    *Last\ Server*) show_last_server ;;
-    *Lowest\ Latency*) show_quickest ;;
-    *Random*) show_random ;;
-    *Choose*) show_choose_server_menu ;;
-    *) back_to show_main_menu ;;
-  esac
-}
-
-show_tests_menu() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Get current status
-  status_output=$("$SCRIPT_DIR/lazyvpn-status")
-  status=$(echo "$status_output" | grep "^status=" | cut -d= -f2)
-
-  if [[ "$status" == "connected" ]]; then
-    server=$(echo "$status_output" | grep "^server=" | cut -d= -f2)
-    server_file=$(echo "$status_output" | grep "^server_file=" | cut -d= -f2)
-    connected_tests="⏱️  Test Current Latency\n💨  Speedtest Current Server\n🔒  DNS Leak Test\n"
-  else
-    connected_tests=""
-  fi
-
-  local options="${connected_tests}⏱️  Latencytest All Servers\n📊  Speedtest All Servers\n📈  Performance History"
-
-  case $(menu "Tests" "$options") in
-    *Test\ Current\ Latency*) omarchy-launch-floating-terminal-with-presentation lazyvpn-latency-test "$server_file" ;;
-    *Speedtest\ Current\ Server*) omarchy-launch-floating-terminal-with-presentation lazyvpn-speedtest-single "$server_file" ;;
-    *DNS\ Leak\ Test*) omarchy-launch-floating-terminal-with-presentation lazyvpn-dns-leak-test ;;
-    *Latencytest\ All*) omarchy-launch-floating-terminal-with-presentation lazyvpn-latencytest-all ;;
-    *Speedtest\ All*) show_speedtest_all ;;
-    *Performance\ History*) omarchy-launch-floating-terminal-with-presentation lazyvpn-performance-history ;;
-    *) back_to show_main_menu ;;
-  esac
+  # Launch dynamic server browser in floating terminal
+  omarchy-launch-floating-terminal-with-presentation lazyvpn-browse-servers
+  show_main_menu
 }
 
 show_disconnect_confirm() {
   case $(menu "Disconnect" "✅  Yes, Disconnect\n❌  Cancel") in
-    *Yes*) omarchy-launch-floating-terminal-with-presentation lazyvpn-disconnect ;;
+    *Yes*)
+      omarchy-launch-floating-terminal-with-presentation lazyvpn-disconnect
+      show_main_menu
+      ;;
     *) show_main_menu ;;
   esac
 }
@@ -233,192 +198,48 @@ show_last_server() {
     return
   fi
 
-  WG_DIR="$CONFIG_DIR/wireguard"
+  # Handle dynamic server format: "dynamic:provider:server_name"
+  if [[ "$LAST_CONNECTED_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+    local provider="${BASH_REMATCH[1]}"
+    local server_name="${BASH_REMATCH[2]}"
 
-  # Check if the config file still exists
-  if [[ ! -f "$WG_DIR/${LAST_CONNECTED_SERVER}.conf" ]]; then
-    notify "Last server config not found: ${LAST_CONNECTED_SERVER}\nThe config file may have been deleted."
-    back_to show_main_menu
-    return
+    # Check if provider is still configured
+    if [[ ! -f "$CONFIG_DIR/providers/${provider}.conf" ]]; then
+      notify "Provider not configured: $provider\nRun provider setup again."
+      back_to show_main_menu
+      return
+    fi
+
+    # Check if server is in cache
+    local cache_file="$CONFIG_DIR/cache/${provider}_servers.json"
+    if [[ ! -f "$cache_file" ]]; then
+      notify "Server cache not found.\nRefreshing server list..."
+      "$SCRIPT_DIR/lazyvpn-fetch-servers" "$provider" >/dev/null 2>&1
+    fi
+
+    omarchy-launch-floating-terminal-with-presentation lazyvpn-connect-dynamic "$provider" "$server_name"
+    show_main_menu
+  else
+    # Traditional config file server
+    WG_DIR="$CONFIG_DIR/wireguard"
+
+    # Check if the config file still exists
+    if [[ ! -f "$WG_DIR/${LAST_CONNECTED_SERVER}.conf" ]]; then
+      notify "Last server config not found: ${LAST_CONNECTED_SERVER}\nThe config file may have been deleted."
+      back_to show_main_menu
+      return
+    fi
+
+    omarchy-launch-floating-terminal-with-presentation lazyvpn-connect "$LAST_CONNECTED_SERVER"
+    show_main_menu
   fi
-
-  omarchy-launch-floating-terminal-with-presentation lazyvpn-connect "$LAST_CONNECTED_SERVER"
-}
-
-show_random() {
-  WG_DIR="$CONFIG_DIR/wireguard"
-
-  # Check if configs exist
-  if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
-    back_to show_main_menu
-    return
-  fi
-
-  omarchy-launch-floating-terminal-with-presentation lazyvpn-random
-}
-
-show_quickest() {
-  WG_DIR="$CONFIG_DIR/wireguard"
-
-  # Check if configs exist
-  if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
-    back_to show_main_menu
-    return
-  fi
-
-  omarchy-launch-floating-terminal-with-presentation lazyvpn-quickest
-}
-
-show_speedtest_all() {
-  WG_DIR="$CONFIG_DIR/wireguard"
-
-  # Check if configs exist
-  if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
-    back_to show_main_menu
-    return
-  fi
-
-  omarchy-launch-floating-terminal-with-presentation lazyvpn-speedtest-all
 }
 
 show_choose_server_menu() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  WG_DIR="$CONFIG_DIR/wireguard"
-
-  # Check if configs exist
-  if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-    notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
-    back_to show_connections_menu
-    return
-  fi
-
-  # Use fzf-based chooser and connect in floating terminal
+  # lazyvpn-choose-server handles empty state gracefully
+  # (shows favorites + manual configs, or helpful message if empty)
   omarchy-launch-floating-terminal-with-presentation lazyvpn-choose-server
-}
-
-show_server_details() {
-  local server_name="$1"
-
-  # Get pretty name for menu title
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local pretty_name=$(get_pretty_server_name "$server_name" "$SCRIPT_DIR")
-
-  # Get full server info
-  info_output=$("$SCRIPT_DIR/lazyvpn-get-server-info" "$server_name")
-  country=$(echo "$info_output" | grep "^country=" | cut -d= -f2)
-  city=$(echo "$info_output" | grep "^city=" | cut -d= -f2)
-  endpoint=$(echo "$info_output" | grep "^endpoint=" | cut -d= -f2)
-  services=$(echo "$info_output" | grep "^services=" | cut -d= -f2)
-  provider=$(echo "$info_output" | grep "^provider=" | cut -d= -f2)
-
-  location="${country}${city:+-$city}"
-
-  # Add provider to menu if detected
-  provider_line=""
-  if [[ -n "$provider" ]]; then
-    provider_line="🏢  Provider: $provider\n"
-  fi
-
-  case $(menu "$pretty_name" "${provider_line}📍  Location: $location\n🌐  Endpoint: $endpoint\n🛠️  Services: $services\n✅  Connect to this server\n⏱️  Test Latency\n💨  Test Speed\n📈  Performance History\n⬅️  Back") in
-    *Connect*) omarchy-launch-floating-terminal-with-presentation lazyvpn-connect "$server_name" ;;
-    *Test\ Latency*) omarchy-launch-floating-terminal-with-presentation lazyvpn-latency-test "$server_name" ;;
-    *Test\ Speed*) omarchy-launch-floating-terminal-with-presentation lazyvpn-speedtest-single "$server_name" ;;
-    *Performance\ History*) omarchy-launch-floating-terminal-with-presentation lazyvpn-performance-history "$server_name" ;;
-    *) show_choose_server_menu ;;
-  esac
-}
-
-show_autoconnect_menu() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Load current config
-  source "$CONFIG_FILE" 2>/dev/null || true
-
-  # Format toggle states with emojis
-  autoconnect_state=$([ "$AUTOCONNECT" == "true" ] && echo "🟢 ON" || echo "🔴 OFF")
-
-  # Mode indicators
-  quickest_state=$([ "${AUTOCONNECT_MODE:-quickest}" == "quickest" ] && echo "🟢" || echo "🔴")
-  random_state=$([ "${AUTOCONNECT_MODE:-quickest}" == "random" ] && echo "🟢" || echo "🔴")
-  last_used_state=$([ "${AUTOCONNECT_MODE:-quickest}" == "last_used" ] && echo "🟢" || echo "🔴")
-  specific_state=$([ "${AUTOCONNECT_MODE:-quickest}" == "specific" ] && echo "🟢" || echo "🔴")
-
-  # Get pretty server names for display
-  last_used_display="🔄  Last Used Server $last_used_state"
-  if [[ "${AUTOCONNECT_MODE:-quickest}" == "last_used" ]] && [[ -n "$LAST_CONNECTED_SERVER" ]]; then
-    last_server_pretty=$(get_pretty_server_name "$LAST_CONNECTED_SERVER" "$SCRIPT_DIR")
-    last_used_display="🔄  Last Used Server $last_used_state ($last_server_pretty)"
-  fi
-
-  specific_display="🌍  Choose Specific Server $specific_state"
-  if [[ "${AUTOCONNECT_MODE:-quickest}" == "specific" ]] && [[ -n "$AUTOCONNECT_SERVER" ]]; then
-    specific_server_pretty=$(get_pretty_server_name "$AUTOCONNECT_SERVER" "$SCRIPT_DIR")
-    specific_display="🌍  Choose Specific Server $specific_state ($specific_server_pretty)"
-  fi
-
-  case $(menu "Autoconnect" "🔌  Autoconnect: $autoconnect_state\n⚡  Lowest Latency Server $quickest_state\n🎲  Random Server $random_state\n$last_used_display\n$specific_display") in
-    *Autoconnect:*) omarchy-launch-floating-terminal-with-presentation lazyvpn-toggle-autoconnect && show_autoconnect_menu ;;
-    *Lowest\ Latency*) "$SCRIPT_DIR/lazyvpn-set-autoconnect-mode" quickest >/dev/null 2>&1 && show_autoconnect_menu ;;
-    *Random*) "$SCRIPT_DIR/lazyvpn-set-autoconnect-mode" random >/dev/null 2>&1 && show_autoconnect_menu ;;
-    *Last\ Used*) "$SCRIPT_DIR/lazyvpn-set-autoconnect-mode" last_used >/dev/null 2>&1 && show_autoconnect_menu ;;
-    *Choose\ Specific*) show_choose_specific_autoconnect_server ;;
-    *) back_to show_main_menu ;;
-  esac
-}
-
-show_killswitch_menu() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Load current config
-  source "$CONFIG_FILE" 2>/dev/null || true
-
-  # Format toggle states with emojis
-  killswitch_state=$([ "$KILLSWITCH" == "true" ] && echo "🟢 ON" || echo "🔴 OFF")
-  local_network_state=$([ "$ALLOW_LOCAL_NETWORK" == "true" ] && echo "🟢 ON" || echo "🔴 OFF")
-
-  # Killswitch disconnect has three states: auto, prompt, never
-  case "${KILLSWITCH_AUTO_DISABLE:-true}" in
-    true) killswitch_auto_disable_state="🟢 AUTO" ;;
-    false) killswitch_auto_disable_state="🟡 PROMPT" ;;
-    never) killswitch_auto_disable_state="🔴 NEVER" ;;
-    *) killswitch_auto_disable_state="🟢 AUTO" ;;
-  esac
-
-  case $(menu "Killswitch Settings" "🛡️  Killswitch: $killswitch_state\n🏠  Local Network Access: $local_network_state\n🔄  Killswitch Disconnect: $killswitch_auto_disable_state") in
-    *Killswitch:*) omarchy-launch-floating-terminal-with-presentation lazyvpn-toggle-killswitch && show_killswitch_menu ;;
-    *Local\ Network\ Access*) "$SCRIPT_DIR/lazyvpn-toggle-local-network" >/dev/null 2>&1 && show_killswitch_menu ;;
-    *Killswitch\ Disconnect*) "$SCRIPT_DIR/lazyvpn-toggle-killswitch-auto-disable" >/dev/null 2>&1 && show_killswitch_menu ;;
-    *) back_to show_main_menu ;;
-  esac
-}
-
-show_add_server_flow() {
-  # Check for config changes and show prompt if any (from external changes)
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Launch add server script in pretty terminal with presentation
-  omarchy-launch-floating-terminal-with-presentation lazyvpn-add-server
-
-  # Return to main menu (which will check for changes automatically)
   show_main_menu
-}
-
-show_choose_specific_autoconnect_server() {
-  # Check for config changes and show prompt if any
-  "$SCRIPT_DIR/lazyvpn-check-config-changes-prompt"
-
-  # Use fzf-based chooser to set autoconnect server in floating terminal
-  omarchy-launch-floating-terminal-with-presentation lazyvpn-choose-autoconnect-server
-
-  # Return to autoconnect menu to show updated state
-  show_autoconnect_menu
 }
 
 # Main entry point
@@ -427,7 +248,6 @@ if [[ -n "$1" ]]; then
   case "${1,,}" in
     status) show_main_menu ;;
     connect) show_choose_server_menu ;;
-    options) show_autoconnect_menu ;;
     *) show_main_menu ;;
   esac
 else
