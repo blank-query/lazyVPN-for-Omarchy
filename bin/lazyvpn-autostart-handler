@@ -116,7 +116,14 @@ case "$AUTOCONNECT_MODE" in
     ;;
   last_used)
     if [[ -n "$LAST_CONNECTED_SERVER" ]]; then
-      "$SCRIPT_DIR/lazyvpn-connect" "$LAST_CONNECTED_SERVER"
+      # Handle dynamic server format: "dynamic:provider:server_name"
+      if [[ "$LAST_CONNECTED_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+        PROVIDER="${BASH_REMATCH[1]}"
+        SERVER_NAME="${BASH_REMATCH[2]}"
+        "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER_NAME"
+      else
+        "$SCRIPT_DIR/lazyvpn-connect" "$LAST_CONNECTED_SERVER"
+      fi
     else
       # Fallback to random if no last used server
       warn "No last used server found, connecting to random server"
@@ -125,7 +132,14 @@ case "$AUTOCONNECT_MODE" in
     ;;
   specific)
     if [[ -n "$AUTOCONNECT_SERVER" ]]; then
-      "$SCRIPT_DIR/lazyvpn-connect" "$AUTOCONNECT_SERVER"
+      # Handle dynamic server format: "dynamic:provider:server_name"
+      if [[ "$AUTOCONNECT_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+        PROVIDER="${BASH_REMATCH[1]}"
+        SERVER_NAME="${BASH_REMATCH[2]}"
+        "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER_NAME"
+      else
+        "$SCRIPT_DIR/lazyvpn-connect" "$AUTOCONNECT_SERVER"
+      fi
     else
       warn "No specific server configured for autoconnect"
     fi

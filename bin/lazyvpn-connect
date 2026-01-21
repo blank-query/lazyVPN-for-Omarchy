@@ -332,3 +332,22 @@ if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_F
   warn "Connected successfully but failed to save server name to config"
   warn "Autoconnect 'last_used' mode may not work correctly"
 fi
+
+# Post-connection options
+echo ""
+echo "[Enter] Done  [d] DNS Leak Test  [s] Speedtest  [l] Latency"
+read -r -n 1 key
+echo ""
+case "$key" in
+  d|D)
+    xdg-open "https://ipleak.net" &>/dev/null &
+    echo "Opening ipleak.net in browser..."
+    sleep 1
+    ;;
+  s|S)
+    "$SCRIPT_DIR/lazyvpn-speedtest-current"
+    ;;
+  l|L)
+    "$SCRIPT_DIR/lazyvpn-latency-current"
+    ;;
+esac

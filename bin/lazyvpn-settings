@@ -1,0 +1,300 @@
+#!/bin/bash
+
+# LazyVPN Settings - fzf-based settings interface
+# Sections: Dynamic Server Providers, Protection, Automation, Manual Servers, Advanced
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
+
+# Load config
+load_config "$CONFIG_FILE"
+
+# Generate settings list with current values
+generate_settings() {
+  # Count configured providers
+  local provider_count=0
+  for provider_file in "$PROVIDERS_DIR"/*.conf; do
+    [[ -f "$provider_file" ]] && ((provider_count++))
+  done
+  local provider_status="None"
+  [[ $provider_count -gt 0 ]] && provider_status="$provider_count"
+
+  # Status indicators
+  local ks_status=$([[ "$KILLSWITCH" == "true" ]] && echo "ON" || echo "OFF")
+  local lan_status=$([[ "$ALLOW_LOCAL_NETWORK" == "true" ]] && echo "ON" || echo "OFF")
+  local ipv6_status=$([[ "${DISABLE_IPV6:-true}" == "true" ]] && echo "ON" || echo "OFF")
+
+  # Killswitch disconnect behavior
+  local ks_disconnect
+  case "${KILLSWITCH_AUTO_DISABLE:-true}" in
+    true) ks_disconnect="Auto" ;;
+    false) ks_disconnect="Prompt" ;;
+    never) ks_disconnect="Never" ;;
+    *) ks_disconnect="Auto" ;;
+  esac
+
+  # Autoconnect settings
+  local ac_status=$([[ "$AUTOCONNECT" == "true" ]] && echo "ON" || echo "OFF")
+  local ac_mode="${AUTOCONNECT_MODE:-last_used}"
+  local ac_mode_display
+  case "$ac_mode" in
+    quickest) ac_mode_display="Fastest" ;;
+    random) ac_mode_display="Random" ;;
+    last_used) ac_mode_display="Last Used" ;;
+    specific) ac_mode_display="Specific" ;;
+    *) ac_mode_display="Last Used" ;;
+  esac
+
+  # Specific server display
+  local specific_server="Not Set"
+  if [[ -n "$AUTOCONNECT_SERVER" ]]; then
+    # Handle dynamic:provider:server_name format
+    if [[ "$AUTOCONNECT_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+      specific_server="${BASH_REMATCH[2]}"
+    else
+      specific_server="$AUTOCONNECT_SERVER"
+    fi
+  fi
+
+  # Auto-recover and auto-failover
+  local ar_status=$([[ "${AUTO_RECOVER:-false}" == "true" ]] && echo "ON" || echo "OFF")
+  local af_status=$([[ "${AUTO_FAILOVER:-false}" == "true" ]] && echo "ON" || echo "OFF")
+
+  # Interface name
+  local interface="${CONNECTION_NAME:-wg0}"
+
+  # Count manual servers
+  local manual_count=0
+  for conf in "$CONFIG_DIR/wireguard"/*.conf; do
+    [[ -f "$conf" ]] && ((manual_count++))
+  done
+  local manual_status="None"
+  [[ $manual_count -gt 0 ]] && manual_status="$manual_count"
+
+  # Column widths for alignment
+  # Format: action  name  state  description
+  # Using printf for consistent column alignment
+  # NOTE: fzf displays first item at bottom, so output in reverse order
+  # Items come BEFORE their section header so header appears on top visually
+
+  printf "%-20s %-26s %-12s %s\n" "github"            "Show Github"              ""                   "Open project page for help or issues"
+  printf "%-20s %-26s %-12s %s\n" "tutorial"          "Show Tutorial"            ""                   "Learn how to use LazyVPN"
+  printf "%-20s %-26s %-12s %s\n" "uninstall"         "Uninstall LazyVPN"        ""                   "Remove LazyVPN and all settings"
+  printf "%-20s %-26s %-12s %s\n" "rename-interface"  "WireGuard Interface"      "[$interface]"       "Change the network interface name"
+  echo "─── Advanced ───"
+
+  # Testing section - only show when connected
+  if is_connected "${CONNECTION_NAME:-wg0}"; then
+    printf "%-20s %-26s %-12s %s\n" "latency-test"      "Latency Test"             ""                   "Test ping to current server"
+    printf "%-20s %-26s %-12s %s\n" "speedtest"         "Speedtest"                ""                   "Test download speed (10MB file)"
+    printf "%-20s %-26s %-12s %s\n" "leak-test"         "IP & DNS Leak Test"       ""                   "Open ipleak.net in browser"
+    echo "─── Testing ───"
+  fi
+
+  printf "%-20s %-26s %-12s %s\n" "remove-server"     "Remove Server"            ""                   "Delete a manual server config"
+  printf "%-20s %-26s %-12s %s\n" "add-server"        "Import WireGuard Config"  "[$manual_status]"   "Manually add a server config"
+  echo "─── Manual Servers ───"
+
+  printf "%-20s %-26s %-12s %s\n" "auto-failover"      "Auto-Failover"            "[$af_status]"       "Try new server if current one fails"
+  printf "%-20s %-26s %-12s %s\n" "auto-recover"       "Auto-Recover Connection"  "[$ar_status]"       "Reconnect if connection drops"
+  if [[ "$ac_mode" == "specific" ]]; then
+    printf "%-20s %-26s %-12s %s\n" "autoconnect-server" "AC Specific Server"     "[$specific_server]" "The server to connect to on startup"
+  fi
+  printf "%-20s %-26s %-12s %s\n" "autoconnect-mode"   "AC Startup Server"        "[$ac_mode_display]" "Which server to use for autoconnect"
+  printf "%-20s %-26s %-12s %s\n" "autoconnect"        "Autoconnect on Startup"   "[$ac_status]"       "Connect to VPN when system boots"
+  echo "─── Automation ───"
+
+  printf "%-20s %-26s %-12s %s\n" "ipv6-protection"       "IPv6 Leak Protection"    "[$ipv6_status]"  "Disable IPv6 to prevent leaks"
+  printf "%-20s %-26s %-12s %s\n" "killswitch-disconnect" "KS on Disconnect"        "[$ks_disconnect]" "Killswitch behavior when you disconnect"
+  printf "%-20s %-26s %-12s %s\n" "local-network"         "KS Local Network"        "[$lan_status]"   "Allow LAN when killswitch is active"
+  printf "%-20s %-26s %-12s %s\n" "killswitch"            "Killswitch"              "[$ks_status]"    "Block all traffic if VPN disconnects"
+  echo "─── Protection ───"
+
+  printf "%-20s %-26s %-12s %s\n" "refresh-servers"   "Refresh Server List"     ""                   "Re-download servers from providers"
+  printf "%-20s %-26s %-12s %s\n" "setup-provider"    "Set Up Provider"         "[$provider_status]" "Add or manage provider API credentials"
+  echo "─── Dynamic Server Providers ───"
+}
+
+# Handle setting selection
+handle_selection() {
+  local selection="$1"
+
+  # Extract the action (first word)
+  local action
+  action=$(echo "$selection" | awk '{print $1}')
+
+  case "$action" in
+    setup-provider)
+      "$SCRIPT_DIR/lazyvpn-provider-setup"
+      ;;
+    refresh-servers)
+      "$SCRIPT_DIR/lazyvpn-fetch-servers" --force
+      echo ""
+      read -r -p "Press Enter to continue..."
+      ;;
+    killswitch)
+      "$SCRIPT_DIR/lazyvpn-toggle-killswitch"
+      ;;
+    local-network)
+      "$SCRIPT_DIR/lazyvpn-toggle-local-network"
+      echo "Local network access toggled."
+      sleep 1
+      ;;
+    killswitch-disconnect)
+      "$SCRIPT_DIR/lazyvpn-toggle-killswitch-auto-disable"
+      echo "Killswitch disconnect behavior updated."
+      sleep 1
+      ;;
+    ipv6-protection)
+      "$SCRIPT_DIR/lazyvpn-toggle-ipv6-protection"
+      echo "IPv6 protection toggled."
+      sleep 1
+      ;;
+    autoconnect)
+      "$SCRIPT_DIR/lazyvpn-toggle-autoconnect"
+      ;;
+    autoconnect-mode)
+      show_autoconnect_mode_menu
+      ;;
+    autoconnect-server)
+      "$SCRIPT_DIR/lazyvpn-choose-autoconnect-server"
+      ;;
+    auto-recover)
+      "$SCRIPT_DIR/lazyvpn-toggle-auto-recover"
+      echo "Auto-recover toggled."
+      sleep 1
+      ;;
+    auto-failover)
+      "$SCRIPT_DIR/lazyvpn-toggle-auto-failover"
+      echo "Auto-failover toggled."
+      sleep 1
+      ;;
+    add-server)
+      "$SCRIPT_DIR/lazyvpn-add-server"
+      ;;
+    remove-server)
+      "$SCRIPT_DIR/lazyvpn-remove-server"
+      ;;
+    latency-test)
+      "$SCRIPT_DIR/lazyvpn-latency-current"
+      ;;
+    speedtest)
+      "$SCRIPT_DIR/lazyvpn-speedtest-current"
+      ;;
+    leak-test)
+      "$SCRIPT_DIR/lazyvpn-leak-test"
+      ;;
+    rename-interface)
+      "$SCRIPT_DIR/lazyvpn-rename-connection"
+      ;;
+    tutorial)
+      "$SCRIPT_DIR/lazyvpn-tutorial"
+      ;;
+    github)
+      xdg-open "https://github.com/blank-query/lazyVPN-for-Omarchy" &>/dev/null &
+      echo "Opening GitHub in browser..."
+      sleep 1
+      ;;
+    uninstall)
+      echo ""
+      read -r -p "Are you sure you want to uninstall LazyVPN? [y/N] " confirm
+      if [[ "${confirm,,}" == "y" ]]; then
+        "$SCRIPT_DIR/lazyvpn-uninstall"
+        # Exit after uninstall - don't try to return to menu
+        exit 0
+      fi
+      ;;
+    ───*)
+      # Section header - do nothing, return to menu
+      return 0
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+# Show autoconnect mode selection submenu
+show_autoconnect_mode_menu() {
+  load_config "$CONFIG_FILE"
+  local current_mode="${AUTOCONNECT_MODE:-last_used}"
+
+  local options
+  options=$(cat << 'EOF'
+last_used    Last Used Server (reconnect to previous server)
+quickest     Lowest Latency (test all servers, connect to fastest)
+random       Random Server (pick randomly from all servers)
+specific     Specific Server (always connect to chosen server)
+EOF
+)
+
+  echo ""
+  echo "Select startup server mode:"
+  echo ""
+
+  local selected
+  selected=$(echo "$options" | fzf --height=10 --no-info --prompt="Mode: " \
+    --header="Current: $current_mode" \
+    --bind="enter:accept")
+
+  if [[ -n "$selected" ]]; then
+    local mode
+    mode=$(echo "$selected" | awk '{print $1}')
+
+    if [[ "$mode" == "specific" ]]; then
+      # Specific mode requires choosing a server - go directly to server picker
+      echo ""
+      echo "Now choose which server to use..."
+      sleep 1
+      "$SCRIPT_DIR/lazyvpn-choose-autoconnect-server"
+    else
+      "$SCRIPT_DIR/lazyvpn-set-autoconnect-mode" "$mode"
+      echo ""
+      echo "Startup server mode set to: $mode"
+      sleep 1
+    fi
+  fi
+}
+
+# Main loop
+main() {
+  while true; do
+    # Clear screen before showing menu
+    clear
+
+    # Reload config for fresh values
+    load_config "$CONFIG_FILE"
+
+    local selected
+    selected=$(generate_settings | fzf \
+      --height=100% \
+      --no-info \
+      --prompt="Settings: " \
+      --header="LazyVPN Settings  │  Enter: Select  │  Esc: Exit" \
+      --header-first \
+      --ansi \
+      --bind="enter:accept,esc:abort" \
+      --with-nth=2.. \
+      --color="header:italic")
+
+    if [[ -z "$selected" ]]; then
+      # User pressed Esc or Ctrl-C
+      break
+    fi
+
+    # Skip section headers
+    if [[ "$selected" == ───* ]]; then
+      continue
+    fi
+
+    handle_selection "$selected"
+  done
+}
+
+main

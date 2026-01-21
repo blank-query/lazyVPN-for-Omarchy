@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# Test download speed through the currently connected VPN server
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+clear
+
+# Load config
+load_config "$CONFIG_FILE"
+CONN_NAME="${CONNECTION_NAME:-wg0}"
+
+# Check if connected
+if ! is_connected "$CONN_NAME"; then
+  echo "Not connected to VPN."
+  echo ""
+  read -r -p "Press Enter to continue..."
+  exit 1
+fi
+
+# Check if curl is available
+if ! command -v curl &>/dev/null; then
+  echo "Error: curl is required for speed testing"
+  echo ""
+  read -r -p "Press Enter to continue..."
+  exit 1
+fi
+
+# Check if bc is available
+if ! command -v bc &>/dev/null; then
+  echo "Error: bc is required for speed calculations"
+  echo ""
+  read -r -p "Press Enter to continue..."
+  exit 1
+fi
+
+# Get server name for display
+server_name="${LAST_CONNECTED_SERVER:-Unknown}"
+if [[ "$server_name" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+  display_name="${BASH_REMATCH[2]}"
+else
+  display_name="$server_name"
+fi
+
+# Test file URL (10MB file from a fast CDN)
+TEST_URL="http://speedtest.tele2.net/10MB.zip"
+
+echo ""
+echo "Testing download speed through: $display_name"
+echo ""
+
+# Download test file and measure speed (show progress bar)
+# Progress bar goes to stderr (displayed), speed value goes to stdout (captured)
+speed=$(curl -o /dev/null --progress-bar -w '%{speed_download}' --connect-timeout 10 --max-time 60 "$TEST_URL")
+echo ""
+
+# Convert bytes/sec to Mbps
+if [[ -n "$speed" ]] && [[ "$speed" != "0.000" ]]; then
+  speed_mbps=$(echo "scale=2; $speed * 8 / 1000000" | bc -l 2>/dev/null || echo "0")
+  echo "Download Speed: ${speed_mbps} Mbps"
+else
+  echo "Speed test failed (timeout or connection error)"
+fi
+
+echo ""
+read -r -p "Press Enter to continue..."

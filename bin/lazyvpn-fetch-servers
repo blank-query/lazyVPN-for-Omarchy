@@ -1,0 +1,284 @@
+#!/bin/bash
+
+# Fetch and cache VPN server list from gluetun
+# Data source: https://github.com/qdm12/gluetun (MIT License)
+
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
+CONFIG_DIR="$HOME/.config/lazyvpn"
+CACHE_DIR="$CONFIG_DIR/cache"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
+
+# gluetun server list URL (raw from GitHub)
+GLUETUN_SERVERS_URL="https://raw.githubusercontent.com/qdm12/gluetun/master/internal/storage/servers.json"
+
+# Cache expiry (24 hours in seconds)
+CACHE_EXPIRY=86400
+
+# Ensure directories exist
+mkdir -p "$CACHE_DIR"
+
+# Check for jq
+if ! command -v jq &>/dev/null; then
+  error "jq is required but not installed. Install with: sudo pacman -S jq"
+fi
+
+# Provider name mappings (gluetun uses different names)
+declare -A GLUETUN_PROVIDER_MAP=(
+  [protonvpn]="protonvpn"
+  [mullvad]="mullvad"
+  [ivpn]="ivpn"
+  [pia]="private internet access"
+  [nordvpn]="nordvpn"
+  [surfshark]="surfshark"
+  [windscribe]="windscribe"
+)
+
+# Provider display names
+declare -A PROVIDER_DISPLAY=(
+  [protonvpn]="ProtonVPN"
+  [mullvad]="Mullvad"
+  [ivpn]="IVPN"
+  [pia]="Private Internet Access"
+  [nordvpn]="NordVPN"
+  [surfshark]="Surfshark"
+  [windscribe]="Windscribe"
+)
+
+# Fetch raw server data
+fetch_raw_servers() {
+  local cache_file="$CACHE_DIR/servers_raw.json"
+
+  # Check if we need to refresh
+  local need_refresh=true
+  if [[ -f "$cache_file" ]]; then
+    local file_age=$(($(date +%s) - $(stat -c %Y "$cache_file")))
+    if [[ $file_age -lt $CACHE_EXPIRY ]]; then
+      need_refresh=false
+    fi
+  fi
+
+  if [[ "$need_refresh" == "true" ]] || [[ "$1" == "--force" ]]; then
+    echo "Fetching server list from gluetun..."
+
+    if ! curl -s --connect-timeout 10 --max-time 60 -o "${cache_file}.tmp" "$GLUETUN_SERVERS_URL"; then
+      if [[ -f "$cache_file" ]]; then
+        warn "Failed to fetch new server list, using cached data"
+        return 0
+      else
+        error "Failed to fetch server list and no cache available"
+      fi
+    fi
+
+    # Validate JSON
+    if ! jq empty "${cache_file}.tmp" 2>/dev/null; then
+      rm -f "${cache_file}.tmp"
+      if [[ -f "$cache_file" ]]; then
+        warn "Downloaded data is invalid JSON, using cached data"
+        return 0
+      else
+        error "Downloaded data is invalid JSON and no cache available"
+      fi
+    fi
+
+    mv "${cache_file}.tmp" "$cache_file"
+    echo "Server list updated ($(du -h "$cache_file" | cut -f1))"
+  else
+    local hours_old=$(($(date +%s) - $(stat -c %Y "$cache_file")))
+    hours_old=$((hours_old / 3600))
+    echo "Using cached server list (${hours_old}h old)"
+  fi
+
+  return 0
+}
+
+# Filter and cache servers for a specific provider
+filter_provider_servers() {
+  local provider="$1"
+  local raw_file="$CACHE_DIR/servers_raw.json"
+  local provider_file="$CACHE_DIR/${provider}_servers.json"
+
+  if [[ ! -f "$raw_file" ]]; then
+    error "Raw server cache not found. Run: lazyvpn-fetch-servers"
+  fi
+
+  local gluetun_name="${GLUETUN_PROVIDER_MAP[$provider]}"
+  if [[ -z "$gluetun_name" ]]; then
+    error "Unknown provider: $provider"
+  fi
+
+  echo "Filtering WireGuard servers for ${PROVIDER_DISPLAY[$provider]}..."
+
+  # Filter: provider match, WireGuard only, has public key and IPs
+  # jq filter explanation:
+  # - Access the provider's servers array: .["provider_name"].servers
+  # - Select servers where vpn == "wireguard"
+  # - Remove OpenVPN servers (they don't have wgpubkey)
+  # - Keep only servers with valid data
+
+  # The gluetun data structure is: { "protonvpn": { "servers": [...] }, "mullvad": { "servers": [...] } }
+  if ! jq --arg provider "$gluetun_name" '
+    .[$provider].servers
+    | map(select(
+        .vpn == "wireguard"
+        and (.wgpubkey != null and .wgpubkey != "")
+        and (.ips != null and (.ips | length) > 0)
+      ))
+    | sort_by(.country, .city, .server_name)
+  ' "$raw_file" > "${provider_file}.tmp" 2>/dev/null; then
+    rm -f "${provider_file}.tmp"
+    error "Failed to filter servers for $provider"
+  fi
+
+  # Check if we got any servers
+  local server_count
+  server_count=$(jq 'length' "${provider_file}.tmp")
+
+  if [[ "$server_count" -eq 0 ]]; then
+    rm -f "${provider_file}.tmp"
+    error "No WireGuard servers found for ${PROVIDER_DISPLAY[$provider]}"
+  fi
+
+  mv "${provider_file}.tmp" "$provider_file"
+
+  # Generate stats
+  local countries
+  countries=$(jq '[.[].country] | unique | length' "$provider_file")
+
+  echo ""
+  echo "Server list for ${PROVIDER_DISPLAY[$provider]}:"
+  echo "  Total servers: $server_count"
+  echo "  Countries: $countries"
+  echo "  Cache file: $provider_file"
+  echo ""
+
+  # Show breakdown by feature
+  local p2p_count tor_count sc_count stream_count free_count
+  p2p_count=$(jq '[.[] | select(.port_forward == true)] | length' "$provider_file")
+  tor_count=$(jq '[.[] | select(.tor == true)] | length' "$provider_file")
+  sc_count=$(jq '[.[] | select(.secure_core == true)] | length' "$provider_file")
+  stream_count=$(jq '[.[] | select(.stream == true)] | length' "$provider_file")
+  free_count=$(jq '[.[] | select(.free == true)] | length' "$provider_file")
+
+  echo "Features:"
+  [[ $p2p_count -gt 0 ]] && echo "  🔄 P2P/Port Forward: $p2p_count"
+  [[ $tor_count -gt 0 ]] && echo "  🧅 Tor: $tor_count"
+  [[ $sc_count -gt 0 ]] && echo "  🔒 Secure Core: $sc_count"
+  [[ $stream_count -gt 0 ]] && echo "  📺 Streaming: $stream_count"
+  [[ $free_count -gt 0 ]] && echo "  🤡 Free: $free_count"
+
+  return 0
+}
+
+# List configured providers
+list_providers() {
+  echo "Configured providers:"
+  local found=false
+
+  for provider_file in "$PROVIDERS_DIR"/*.conf; do
+    if [[ -f "$provider_file" ]]; then
+      found=true
+      local provider
+      provider=$(basename "$provider_file" .conf)
+      local display_name="${PROVIDER_DISPLAY[$provider]:-$provider}"
+
+      # Check cache status
+      local cache_file="$CACHE_DIR/${provider}_servers.json"
+      if [[ -f "$cache_file" ]]; then
+        local server_count
+        server_count=$(jq 'length' "$cache_file" 2>/dev/null || echo "0")
+        local cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file")))
+        local hours_old=$((cache_age / 3600))
+
+        if [[ $cache_age -gt $CACHE_EXPIRY ]]; then
+          echo "  • $display_name: $server_count servers (cache expired, ${hours_old}h old)"
+        else
+          echo "  • $display_name: $server_count servers (${hours_old}h old)"
+        fi
+      else
+        echo "  • $display_name: (no cache - run fetch)"
+      fi
+    fi
+  done
+
+  if [[ "$found" == "false" ]]; then
+    echo "  No providers configured."
+    echo ""
+    echo "Run 'lazyvpn-provider-setup' to add a provider."
+  fi
+}
+
+# Main
+case "$1" in
+  --list|-l)
+    list_providers
+    ;;
+
+  --force|-f)
+    fetch_raw_servers --force
+
+    # Refresh all configured providers
+    for provider_file in "$PROVIDERS_DIR"/*.conf; do
+      if [[ -f "$provider_file" ]]; then
+        provider=$(basename "$provider_file" .conf)
+        filter_provider_servers "$provider"
+      fi
+    done
+    ;;
+
+  --help|-h)
+    echo "LazyVPN Server Fetcher"
+    echo ""
+    echo "Downloads and caches VPN server lists from gluetun project."
+    echo "Data source: https://github.com/qdm12/gluetun (MIT License)"
+    echo ""
+    echo "Usage:"
+    echo "  lazyvpn-fetch-servers              # Fetch for all configured providers"
+    echo "  lazyvpn-fetch-servers PROVIDER     # Fetch for specific provider"
+    echo "  lazyvpn-fetch-servers --force      # Force refresh (ignore cache)"
+    echo "  lazyvpn-fetch-servers --list       # List providers and cache status"
+    echo ""
+    echo "Providers: protonvpn, mullvad, ivpn, pia, nordvpn, surfshark, windscribe"
+    ;;
+
+  "")
+    # No argument - fetch for all configured providers
+    fetch_raw_servers
+
+    found=false
+    for provider_file in "$PROVIDERS_DIR"/*.conf; do
+      if [[ -f "$provider_file" ]]; then
+        found=true
+        provider=$(basename "$provider_file" .conf)
+        filter_provider_servers "$provider"
+      fi
+    done
+
+    if [[ "$found" == "false" ]]; then
+      echo "No providers configured."
+      echo ""
+      echo "Run 'lazyvpn-provider-setup' to add a provider."
+    fi
+    ;;
+
+  *)
+    # Specific provider
+    provider="$1"
+
+    # Validate provider name
+    if [[ -z "${PROVIDER_DISPLAY[$provider]}" ]]; then
+      error "Unknown provider: $provider"
+    fi
+
+    # Check if provider is configured
+    if [[ ! -f "$PROVIDERS_DIR/${provider}.conf" ]]; then
+      warn "Provider $provider is not configured. Fetching anyway..."
+    fi
+
+    fetch_raw_servers
+    filter_provider_servers "$provider"
+    ;;
+esac

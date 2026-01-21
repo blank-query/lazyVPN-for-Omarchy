@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Choose a server for autoconnect using fzf picker
+# Supports both manual configs and dynamic server list
 
 # Source common functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,57 +10,151 @@ source "$SCRIPT_DIR/lazyvpn-common" || exit 1
 
 CONFIG_DIR="$HOME/.config/lazyvpn"
 WG_DIR="$CONFIG_DIR/wireguard"
+CACHE_DIR="$CONFIG_DIR/cache"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
 
-# Check if configs exist
-if [[ ! -d "$WG_DIR" ]] || [[ -z "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
-  echo "No WireGuard configs found. Add servers first."
+# Check what's available
+has_manual=false
+has_dynamic=false
+
+if [[ -d "$WG_DIR" ]] && [[ -n "$(ls -A "$WG_DIR"/*.conf 2>/dev/null)" ]]; then
+  has_manual=true
+fi
+
+for provider_file in "$PROVIDERS_DIR"/*.conf; do
+  if [[ -f "$provider_file" ]]; then
+    has_dynamic=true
+    break
+  fi
+done
+
+if [[ "$has_manual" != "true" && "$has_dynamic" != "true" ]]; then
+  echo "No servers available."
+  echo "Set up a provider or import manual configs first."
   echo ""
   read -r -p "Press Enter to continue..."
   exit 1
 fi
 
-# Build list with pretty names for fzf
-TEMP_LIST=$(mktemp)
-trap 'rm -f "$TEMP_LIST"' EXIT
+# If both available, let user choose
+source_type=""
+if [[ "$has_manual" == "true" && "$has_dynamic" == "true" ]]; then
+  echo ""
+  echo "Choose server source:"
+  echo ""
 
-for conf in "$WG_DIR"/*.conf; do
-  [[ -f "$conf" ]] || continue
+  source_type=$(printf "Dynamic Server List\nMy Servers (manual configs)" | fzf \
+    --height=6 \
+    --no-info \
+    --prompt="Source: ")
 
-  filename=$(basename "$conf" .conf)
-  pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
-
-  # Format: pretty name|filename|config_path
-  echo "$pretty_name|$filename|$conf" >> "$TEMP_LIST"
-done
-
-# Use fzf with formatted list and preview
-echo ""
-echo "Select a server for autoconnect:"
-echo ""
-
-SELECTED=$(cat "$TEMP_LIST" | fzf \
-  --prompt="Choose autoconnect server: " \
-  --delimiter='|' \
-  --with-nth=1 \
-  --preview="$SCRIPT_DIR/lazyvpn-get-server-info \$(echo {} | cut -d'|' -f2) | sed 's/^/  /'" \
-  --preview-window=right:40% \
-  --height=80%)
-
-# If no selection (user cancelled)
-if [[ -z "$SELECTED" ]]; then
-  exit 1
+  if [[ -z "$source_type" ]]; then
+    exit 1
+  fi
+elif [[ "$has_dynamic" == "true" ]]; then
+  source_type="Dynamic Server List"
+else
+  source_type="My Servers"
 fi
 
-# Extract filename and set autoconnect
-SERVER_NAME=$(echo "$SELECTED" | cut -d'|' -f2)
-PRETTY_NAME=$(echo "$SELECTED" | cut -d'|' -f1)
+# Handle dynamic server selection
+if [[ "$source_type" == "Dynamic Server List" ]]; then
+  # Build list of all dynamic servers
+  TEMP_LIST=$(mktemp)
+  trap 'rm -f "$TEMP_LIST"' EXIT
+
+  for provider_file in "$PROVIDERS_DIR"/*.conf; do
+    [[ -f "$provider_file" ]] || continue
+    provider=$(basename "$provider_file" .conf)
+    cache_file="$CACHE_DIR/${provider}_servers.json"
+
+    if [[ -f "$cache_file" ]] && command -v jaq &>/dev/null; then
+      # Get server info: server_name, country, city
+      jaq -r '.[] | [(.server_name // .hostname), .country, (.city // "")] | @tsv' "$cache_file" 2>/dev/null | \
+      while IFS=$'\t' read -r server_name country city; do
+        [[ -z "$server_name" ]] && continue
+        location="$country"
+        [[ -n "$city" ]] && location="$country - $city"
+        # Format: display_name|provider|server_name
+        echo "$server_name ($location)|$provider|$server_name" >> "$TEMP_LIST"
+      done
+    fi
+  done
+
+  if [[ ! -s "$TEMP_LIST" ]]; then
+    echo "No dynamic servers found. Try refreshing the server list."
+    echo ""
+    read -r -p "Press Enter to continue..."
+    exit 1
+  fi
+
+  echo ""
+  echo "Select a server for autoconnect:"
+  echo ""
+
+  SELECTED=$(cat "$TEMP_LIST" | fzf \
+    --prompt="Autoconnect server: " \
+    --delimiter='|' \
+    --with-nth=1 \
+    --height=80%)
+
+  if [[ -z "$SELECTED" ]]; then
+    exit 1
+  fi
+
+  provider=$(echo "$SELECTED" | cut -d'|' -f2)
+  server_name=$(echo "$SELECTED" | cut -d'|' -f3)
+  display_name=$(echo "$SELECTED" | cut -d'|' -f1)
+
+  # Save as dynamic:provider:server_name format
+  full_server_id="dynamic:$provider:$server_name"
+
+  echo ""
+  echo "Setting autoconnect to: $display_name"
+  echo ""
+
+  "$SCRIPT_DIR/lazyvpn-set-autoconnect-mode" specific "$full_server_id"
+
+# Handle manual server selection
+else
+  TEMP_LIST=$(mktemp)
+  trap 'rm -f "$TEMP_LIST"' EXIT
+
+  for conf in "$WG_DIR"/*.conf; do
+    [[ -f "$conf" ]] || continue
+
+    filename=$(basename "$conf" .conf)
+    pretty_name=$(get_pretty_server_name "$filename" "$SCRIPT_DIR")
+
+    # Format: pretty name|filename|config_path
+    echo "$pretty_name|$filename|$conf" >> "$TEMP_LIST"
+  done
+
+  echo ""
+  echo "Select a server for autoconnect:"
+  echo ""
+
+  SELECTED=$(cat "$TEMP_LIST" | fzf \
+    --prompt="Autoconnect server: " \
+    --delimiter='|' \
+    --with-nth=1 \
+    --preview="$SCRIPT_DIR/lazyvpn-get-server-info \$(echo {} | cut -d'|' -f2) | sed 's/^/  /'" \
+    --preview-window=right:40% \
+    --height=80%)
+
+  if [[ -z "$SELECTED" ]]; then
+    exit 1
+  fi
+
+  SERVER_NAME=$(echo "$SELECTED" | cut -d'|' -f2)
+  PRETTY_NAME=$(echo "$SELECTED" | cut -d'|' -f1)
+
+  echo ""
+  echo "Setting autoconnect to: $PRETTY_NAME"
+  echo ""
+
+  "$SCRIPT_DIR/lazyvpn-set-autoconnect-mode" specific "$SERVER_NAME"
+fi
 
 echo ""
-echo "Setting autoconnect to: $PRETTY_NAME"
-echo ""
-
-# Set autoconnect mode to specific with this server
-"$SCRIPT_DIR/lazyvpn-set-autoconnect-mode" specific "$SERVER_NAME"
-
-echo ""
-echo "✓ Autoconnect configured successfully"
+echo "Autoconnect server configured successfully"

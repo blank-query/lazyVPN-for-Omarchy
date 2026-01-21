@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# Open ipleak.net for comprehensive leak testing
+# Tests IP, DNS, WebRTC, and IPv6 leaks in one place
+
+xdg-open "https://ipleak.net" &>/dev/null &
+echo "Opening ipleak.net in your browser..."
+echo ""
+echo "Verify that:"
+echo "  • Your IP matches your VPN server location"
+echo "  • DNS servers are not from your ISP"
+echo "  • No WebRTC leak is detected"
+sleep 2

@@ -1,0 +1,259 @@
+#!/bin/bash
+
+# LazyVPN Tutorial - Interactive walkthrough
+
+# Colors
+BOLD='\033[1m'
+DIM='\033[2m'
+CYAN='\033[36m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+RESET='\033[0m'
+
+clear_and_header() {
+  clear
+  echo -e "${BOLD}${CYAN}╔════════════════════════════════════════════════════════════╗${RESET}"
+  echo -e "${BOLD}${CYAN}║            LazyVPN Tutorial - $1${RESET}"
+  echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════╝${RESET}"
+  echo ""
+}
+
+next_prompt() {
+  echo ""
+  echo -e "${DIM}────────────────────────────────────────────────────────────${RESET}"
+  read -r -p "Press Enter to continue (q to quit)... " response
+  [[ "${response,,}" == "q" ]] && exit 0
+}
+
+# Page 1: Welcome
+page_welcome() {
+  clear_and_header "Welcome"
+  cat << 'EOF'
+Welcome to LazyVPN!
+
+LazyVPN is a WireGuard VPN manager designed for simplicity.
+It helps you:
+
+  • Connect to VPN providers (ProtonVPN, Mullvad, etc.)
+  • Manage multiple servers and switch between them
+  • Stay protected with killswitch and auto-reconnect
+  • Find the fastest server with latency testing
+
+This tutorial will walk you through the basics.
+EOF
+  next_prompt
+}
+
+# Page 2: Main Menu
+page_main_menu() {
+  clear_and_header "Main Menu"
+  cat << 'EOF'
+The main menu has 4 options:
+
+  🌐 Dynamic Server List
+     Browse hundreds of servers from your VPN provider.
+     Filter by features, test latency, connect with one click.
+
+  📁 My Servers
+     Your personal server list. Contains:
+     - Favorited servers (⭐) from the dynamic list
+     - Manually imported WireGuard configs
+
+  🔄 Reconnect
+     Quickly reconnect to your last used server.
+     (Only shows when disconnected)
+
+  ⚙️ Settings
+     Configure providers, protection, automation, and more.
+EOF
+  next_prompt
+}
+
+# Page 3: Dynamic Server List
+page_dynamic_servers() {
+  clear_and_header "Dynamic Server List"
+  cat << 'EOF'
+The Dynamic Server List shows all servers from your provider.
+
+FILTER HOTKEYS (toggle on/off):
+  1  P2P/Port Forward - servers that support torrenting
+  2  Tor - servers with Tor integration
+  3  MultiHop - route through multiple countries
+  4  Streaming - optimized for streaming services
+  5  Free - free tier servers
+  0  Cycle provider - switch between providers
+
+ACTION HOTKEYS:
+  6  Random - connect to a random matching server
+  7  Quickest - test latency and connect to fastest
+  8  Latency Test - test all servers (no connect)
+  9  Favorite - add/remove server from My Servers
+
+Just start typing to search by country, city, or server name.
+Press Enter on a server to connect.
+EOF
+  next_prompt
+}
+
+# Page 4: My Servers
+page_my_servers() {
+  clear_and_header "My Servers"
+  cat << 'EOF'
+My Servers is your personal collection of servers.
+
+It contains two types:
+
+  ⭐ FAVORITED SERVERS
+     Servers you've starred from the Dynamic Server List.
+     Press 9 in the server browser to favorite a server.
+     Great for quick access to your preferred servers.
+
+  📄 MANUAL CONFIGS
+     WireGuard .conf files you've imported manually.
+     Useful for servers not in your provider's list,
+     or configs from providers we don't support yet.
+
+Favorites appear at the top with a ⭐ icon.
+Select any server and press Enter to connect.
+EOF
+  next_prompt
+}
+
+# Page 5: Killswitch
+page_killswitch() {
+  clear_and_header "Killswitch"
+  cat << 'EOF'
+The killswitch protects you if the VPN disconnects unexpectedly.
+
+When enabled, it blocks ALL internet traffic unless connected
+to the VPN. This prevents accidental IP leaks.
+
+KILLSWITCH SETTINGS:
+
+  Killswitch [ON/OFF]
+     Master toggle. When ON, you're protected.
+
+  KS Local Network [ON/OFF]
+     Allow access to local devices (printers, NAS, etc.)
+     even when killswitch is blocking internet.
+
+  KS on Disconnect [Auto/Prompt/Never]
+     What happens when YOU manually disconnect:
+     - Auto: Killswitch turns off automatically
+     - Prompt: Ask you each time
+     - Never: Killswitch stays on (blocks internet)
+EOF
+  next_prompt
+}
+
+# Page 6: Autoconnect
+page_autoconnect() {
+  clear_and_header "Autoconnect"
+  cat << 'EOF'
+Autoconnect ensures you're always protected on startup.
+
+AUTOCONNECT SETTINGS:
+
+  Autoconnect on Startup [ON/OFF]
+     When ON, LazyVPN connects automatically at boot.
+
+  AC Startup Server [Last Used/Fastest/Random/Specific]
+     Which server to connect to:
+     - Last Used: reconnect to previous server
+     - Fastest: test latency, pick the quickest
+     - Random: pick randomly from all servers
+     - Specific: always use a chosen server
+
+  Auto-Recover Connection [ON/OFF]
+     Automatically reconnect if the connection drops.
+
+  Auto-Failover [ON/OFF]
+     If current server fails, try a different one.
+EOF
+  next_prompt
+}
+
+# Page 7: Provider Setup
+page_providers() {
+  clear_and_header "Provider Setup"
+  cat << 'EOF'
+LazyVPN works with VPN providers that support WireGuard.
+
+SUPPORTED PROVIDERS:
+  • ProtonVPN (recommended)
+  • More coming soon...
+
+TO SET UP A PROVIDER:
+  1. Go to Settings → Set Up Provider
+  2. Select a single, manually downloaded server conf file from your download folder
+  3. LazyVPN parses the conf file to determine the provider automatically and pulls the private key.
+  4. Server list downloads automatically and refreshes after 24hrs
+
+Your credentials are stored locally and never shared.
+Each provider has different authentication methods -
+the setup wizard will guide you through it.
+EOF
+  next_prompt
+}
+
+# Page 8: Tips
+page_tips() {
+  clear_and_header "Tips & Tricks"
+  cat << 'EOF'
+QUICK TIPS:
+
+  • Use favorites (⭐) for servers you connect to often
+    Press 9 in the server browser to toggle
+
+  • Killswitch + Autoconnect = always protected
+    Enable both for maximum security
+
+  • Latency changes throughout the day
+    Run latency test (hotkey 8) to find current fastest
+
+  • IPv6 Protection should stay ON
+    Prevents IPv6 leaks that bypass the VPN
+
+  • Free servers are often crowded
+    Paid tiers usually have better speeds
+
+KEYBOARD SHORTCUTS:
+  In fzf menus, type to search, arrows to navigate
+  Enter to select, Esc to go back
+EOF
+  next_prompt
+}
+
+# Page 9: Done
+page_done() {
+  clear_and_header "You're Ready!"
+  cat << 'EOF'
+That's the basics of LazyVPN!
+
+NEXT STEPS:
+
+  1. Set up your VPN provider in Settings
+  2. Browse the Dynamic Server List
+  3. Favorite a few servers you like
+  4. Enable Killswitch for protection
+  5. Enable Autoconnect to stay connected
+
+Need help? Check the project README or open an issue:
+  https://github.com/your-repo/lazyVPN-for-Omarchy
+
+Enjoy your private browsing! 🔒
+EOF
+  echo ""
+  read -r -p "Press Enter to return to Settings... "
+}
+
+# Run tutorial
+page_welcome
+page_main_menu
+page_dynamic_servers
+page_my_servers
+page_killswitch
+page_autoconnect
+page_providers
+page_tips
+page_done

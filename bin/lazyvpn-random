@@ -1,28 +1,61 @@
 #!/bin/bash
 
 # Connect to a random VPN server
+# Supports both manual configs and dynamic server list
 
 # Source common functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lazyvpn-common" || exit 1
 # shellcheck source=./lazyvpn-common
 
-WG_DIR="$HOME/.config/lazyvpn/wireguard"
+CONFIG_DIR="$HOME/.config/lazyvpn"
+WG_DIR="$CONFIG_DIR/wireguard"
+CACHE_DIR="$CONFIG_DIR/cache"
+PROVIDERS_DIR="$CONFIG_DIR/providers"
 
-if [ ! -d "$WG_DIR" ]; then
-  error "WireGuard config directory not found: $WG_DIR"
+# Build list of all available servers
+# Format: "manual:server_name" or "dynamic:provider:server_name"
+SERVERS=()
+
+# Add manual configs
+if [[ -d "$WG_DIR" ]]; then
+  for conf in "$WG_DIR"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    server_name=$(basename "$conf" .conf)
+    SERVERS+=("manual:$server_name")
+  done
 fi
 
-# Get a random server from the list of available servers
-SERVER=$(find "$WG_DIR" -name '*.conf' -print0 | shuf -n 1 -z | xargs -0 basename | sed 's/\.conf$//')
+# Add dynamic servers from all configured providers
+for provider_file in "$PROVIDERS_DIR"/*.conf; do
+  [[ -f "$provider_file" ]] || continue
+  provider=$(basename "$provider_file" .conf)
+  cache_file="$CACHE_DIR/${provider}_servers.json"
 
-if [ -z "$SERVER" ]; then
-  notify "No VPN servers found.\nUse '➕ Add New Server' from the menu to import configs."
+  if [[ -f "$cache_file" ]] && command -v jaq &>/dev/null; then
+    while IFS= read -r server_name; do
+      [[ -n "$server_name" ]] && SERVERS+=("dynamic:$provider:$server_name")
+    done < <(jaq -r '.[].server_name // .[].hostname' "$cache_file" 2>/dev/null)
+  fi
+done
+
+if [[ ${#SERVERS[@]} -eq 0 ]]; then
+  notify "No VPN servers found.\nSet up a provider or import configs manually."
   error "No VPN servers found"
 fi
 
-# Get pretty server name
-PRETTY_NAME=$(get_pretty_server_name "$SERVER" "$SCRIPT_DIR")
-info "Connecting to random server: $PRETTY_NAME"
+# Pick a random server
+SELECTED="${SERVERS[$RANDOM % ${#SERVERS[@]}]}"
 
-"$SCRIPT_DIR/lazyvpn-connect" "$SERVER"
+# Connect based on type
+if [[ "$SELECTED" =~ ^manual:(.+)$ ]]; then
+  SERVER="${BASH_REMATCH[1]}"
+  PRETTY_NAME=$(get_pretty_server_name "$SERVER" "$SCRIPT_DIR")
+  info "Connecting to random server: $PRETTY_NAME"
+  "$SCRIPT_DIR/lazyvpn-connect" "$SERVER"
+elif [[ "$SELECTED" =~ ^dynamic:([^:]+):(.+)$ ]]; then
+  PROVIDER="${BASH_REMATCH[1]}"
+  SERVER="${BASH_REMATCH[2]}"
+  info "Connecting to random server: $SERVER ($PROVIDER)"
+  "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER"
+fi

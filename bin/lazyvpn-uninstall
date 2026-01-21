@@ -19,12 +19,6 @@ OMARCHY_MENU_BACKUP="$OMARCHY_MENU_FILE.backup"
 echo "Checking for active VPN connection..."
 CONNECTION_NAME="wg0"  # Default
 
-# Source common functions if available (for is_connected check)
-if [[ -f "$LAZYVPN_BIN/lazyvpn-common" ]]; then
-  # shellcheck source=/dev/null
-  source "$LAZYVPN_BIN/lazyvpn-common"
-fi
-
 if [[ -f "$CONFIG_DIR/config" ]]; then
   # Load connection name from config if it exists
   source "$CONFIG_DIR/config" 2>/dev/null
@@ -33,10 +27,7 @@ fi
 
 # Check if VPN is actually connected (not just if interface exists)
 VPN_CONNECTED=false
-if type is_connected &>/dev/null && is_connected "$CONNECTION_NAME"; then
-  VPN_CONNECTED=true
-elif ip link show "$CONNECTION_NAME" &>/dev/null; then
-  # Fallback: check if interface exists and has state routable/degraded
+if ip link show "$CONNECTION_NAME" &>/dev/null; then
   state=$(networkctl status "$CONNECTION_NAME" 2>/dev/null | grep -E "^\s*State:" | awk '{print $2}')
   if [[ "$state" == "routable" ]] || [[ "$state" == "degraded" ]]; then
     VPN_CONNECTED=true
@@ -309,8 +300,25 @@ else
 fi
 echo ""
 
-# --- Step 7: Securely Remove Performance History ---
-echo "Step 7: Securely removing performance history..."
+# --- Step 7: Stop auto-recover daemon if running ---
+echo "Step 7: Stopping auto-recover daemon..."
+AUTO_RECOVER_PID_FILE="$CONFIG_DIR/.auto-recover.pid"
+if [[ -f "$AUTO_RECOVER_PID_FILE" ]]; then
+  AUTO_RECOVER_PID=$(cat "$AUTO_RECOVER_PID_FILE" 2>/dev/null)
+  if [[ -n "$AUTO_RECOVER_PID" ]] && kill -0 "$AUTO_RECOVER_PID" 2>/dev/null; then
+    kill "$AUTO_RECOVER_PID" 2>/dev/null
+    echo "  - Stopped auto-recover daemon (PID: $AUTO_RECOVER_PID)"
+    sleep 1
+  else
+    echo "  - Auto-recover daemon not running"
+  fi
+else
+  echo "  - No auto-recover daemon found"
+fi
+echo ""
+
+# --- Step 8: Securely Remove Performance History ---
+echo "Step 8: Securely removing performance history..."
 PERF_DIR="$CONFIG_DIR/performance"
 if [[ -d "$PERF_DIR" ]] && ls "$PERF_DIR"/*.log 1>/dev/null 2>&1; then
   echo "  - Performance history contains usage metadata. Securely deleting..."
@@ -334,15 +342,15 @@ else
 fi
 echo ""
 
-# --- Step 8: Securely Remove LazyVPN Config Files ---
-echo "Step 8: Securely removing LazyVPN configuration files..."
+# --- Step 9: Securely Remove LazyVPN Config Files ---
+echo "Step 9: Securely removing LazyVPN configuration files..."
 if [[ ! -d "$CONFIG_DIR" ]]; then
   echo "  - Configuration directory not found."
 else
   # Securely delete LazyVPN's own config files (not server configs)
   echo "  - Securely deleting LazyVPN config and cache files..."
   shredded_count=0
-  for config_file in "$CONFIG_DIR"/config "$CONFIG_DIR"/.server-list-cache; do
+  for config_file in "$CONFIG_DIR"/config "$CONFIG_DIR"/.server-list-cache "$CONFIG_DIR"/favorites "$CONFIG_DIR"/.auto-recover.pid "$CONFIG_DIR"/auto-recover.log "$CONFIG_DIR"/state; do
     if [[ -f "$config_file" ]]; then
       if shred -u "$config_file" 2>/dev/null; then
         echo "    ✓ Securely deleted: $(basename "$config_file")"
@@ -352,6 +360,29 @@ else
       fi
     fi
   done
+
+  # Securely delete provider credentials (contains private keys!)
+  PROVIDERS_DIR="$CONFIG_DIR/providers"
+  if [[ -d "$PROVIDERS_DIR" ]] && ls "$PROVIDERS_DIR"/*.conf 1>/dev/null 2>&1; then
+    echo "  - Securely deleting provider credentials (contains private keys)..."
+    for provider_file in "$PROVIDERS_DIR"/*.conf; do
+      if shred -u "$provider_file" 2>/dev/null; then
+        echo "    ✓ Securely deleted: $(basename "$provider_file")"
+      else
+        rm -f "$provider_file"  # Fallback to regular deletion
+        echo "    - Deleted: $(basename "$provider_file")"
+      fi
+    done
+    rmdir "$PROVIDERS_DIR" 2>/dev/null
+  fi
+
+  # Delete server cache (not sensitive, just cached data)
+  CACHE_DIR="$CONFIG_DIR/cache"
+  if [[ -d "$CACHE_DIR" ]]; then
+    echo "  - Removing server cache..."
+    rm -rf "$CACHE_DIR"
+    echo "    ✓ Removed cache directory"
+  fi
 
   # Handle WireGuard server configs based on user choice
   if [[ "$delete_configs" =~ ^[Yy]$ ]]; then
@@ -377,8 +408,8 @@ else
 fi
 echo ""
 
-# --- Step 8: Clean up systemd-networkd files ---
-echo "Step 9: Cleaning up systemd-networkd configuration..."
+# --- Step 10: Clean up systemd-networkd files ---
+echo "Step 10: Cleaning up systemd-networkd configuration..."
 NETDEV_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.netdev"
 NETWORK_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.network"
 
@@ -415,8 +446,8 @@ else
 fi
 echo ""
 
-# --- Step 9: Remove sudoers configuration ---
-echo "Step 10: Removing sudoers configuration..."
+# --- Step 11: Remove sudoers configuration ---
+echo "Step 11: Removing sudoers configuration..."
 if sudo test -f /etc/sudoers.d/lazyvpn; then
   if sudo rm -f /etc/sudoers.d/lazyvpn; then
     # Verify it's actually gone
@@ -435,8 +466,8 @@ else
 fi
 echo ""
 
-# --- Step 10: Clean up system logs (surgical approach) ---
-echo "Step 11: System log cleanup (optional)..."
+# --- Step 12: Clean up system logs (surgical approach) ---
+echo "Step 12: System log cleanup (optional)..."
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  Privacy Note: System Logs"
@@ -576,8 +607,8 @@ else
 fi
 echo ""
 
-# --- Step 11: Clean up shell history ---
-echo "Step 12: Cleaning shell history..."
+# --- Step 13: Clean up shell history ---
+echo "Step 13: Cleaning shell history..."
 echo ""
 echo "Removing VPN-related commands from shell history files..."
 
