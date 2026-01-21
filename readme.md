@@ -376,4 +376,10 @@ MIT License - Copyright (c) 2025 blank-query
 
 ---
 
+## Previous Version
+
+The previous version of LazyVPN (without dynamic server browser) is preserved in the `old-stable` branch.
+
+---
+
 *WireGuard is a registered trademark of Jason A. Donenfeld.*
