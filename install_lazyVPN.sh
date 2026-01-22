@@ -411,6 +411,76 @@ else
   echo "  ⚠ Keybindings script not found, skipping helper integration"
 fi
 
+echo ""
+echo "Step 9: Adding Waybar integration..."
+
+WAYBAR_CONFIG="$HOME/.config/waybar/config.jsonc"
+WAYBAR_STYLE="$HOME/.config/waybar/style.css"
+
+if [[ -f "$WAYBAR_CONFIG" ]]; then
+  if grep -q "custom/lazyvpn" "$WAYBAR_CONFIG"; then
+    echo "  LazyVPN already integrated in Waybar config"
+  else
+    # Use awk to safely modify the JSON config
+    # This adds "custom/lazyvpn" after "network" ONLY in the modules-right array
+    # and adds the module definition before the final closing brace
+    awk '
+      # Track if we are inside modules-right array
+      /"modules-right"/ { in_modules_right = 1 }
+
+      # When in modules-right and we see "network", add our module after it
+      in_modules_right && /"network"/ && !added_to_array {
+        gsub(/"network"/, "\"network\", \"custom/lazyvpn\"")
+        added_to_array = 1
+      }
+
+      # Closing bracket ends the modules-right array
+      in_modules_right && /\]/ { in_modules_right = 0 }
+
+      # Before the final closing brace, add our module definition
+      /^}[[:space:]]*$/ && !added_module {
+        print "  ,\"custom/lazyvpn\": {"
+        print "    \"format\": \"{}\","
+        print "    \"interval\": 5,"
+        print "    \"return-type\": \"json\","
+        print "    \"exec\": \"~/.local/share/lazyvpn/bin/lazyvpn-waybar-status\","
+        print "    \"on-click\": \"~/.local/share/lazyvpn/bin/lazyvpn-menu\""
+        print "  }"
+        added_module = 1
+      }
+
+      { print }
+    ' "$WAYBAR_CONFIG" > "$WAYBAR_CONFIG.tmp" && mv "$WAYBAR_CONFIG.tmp" "$WAYBAR_CONFIG"
+    echo "  ✓ Added custom/lazyvpn to Waybar config"
+  fi
+else
+  echo "  ⚠ Waybar config not found at $WAYBAR_CONFIG, skipping"
+fi
+
+# Add CSS styling
+if [[ -f "$WAYBAR_STYLE" ]]; then
+  if grep -q "#custom-lazyvpn" "$WAYBAR_STYLE"; then
+    echo "  LazyVPN styling already in Waybar CSS"
+  else
+    cat >> "$WAYBAR_STYLE" << 'CSS_EOF'
+
+/* LazyVPN status indicator */
+#custom-lazyvpn {
+  margin: 0 7.5px;
+}
+CSS_EOF
+    echo "  ✓ Added LazyVPN styling to Waybar CSS"
+  fi
+else
+  echo "  ⚠ Waybar style.css not found at $WAYBAR_STYLE, skipping"
+fi
+
+# Reload waybar if running
+if pgrep -x waybar > /dev/null; then
+  pkill -SIGUSR2 waybar 2>/dev/null || true
+  echo "  ✓ Sent reload signal to Waybar"
+fi
+
 # Mark installation as complete
 INSTALL_COMPLETE=true
 

@@ -333,6 +333,9 @@ if ! atomic_config_update "LAST_CONNECTED_SERVER" "$SERVER_NAME" "$USER_CONFIG_F
   warn "Autoconnect 'last_used' mode may not work correctly"
 fi
 
+# Store public IP for waybar tooltip
+atomic_config_update "LAST_PUBLIC_IP" "$PUBLIC_IP" "$USER_CONFIG_FILE"
+
 # Post-connection options
 echo ""
 echo "[Enter] Done  [d] DNS Leak Test  [s] Speedtest  [l] Latency"
