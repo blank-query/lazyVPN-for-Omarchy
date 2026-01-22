@@ -61,6 +61,9 @@ cd lazyVPN-for-Omarchy
 ### Settings
 ![Settings Menu](images/06-settings.png)
 
+### Waybar Integration
+![Waybar Tooltip](waybar-tooltip.png)
+
 ---
 
 ## Requirements
@@ -203,6 +206,9 @@ Available from Settings menu when connected:
 
 ### ✨ System Integration
 
+- **Waybar Integration**: Status icon appears when connected
+  - Click to open LazyVPN menu
+  - Hover for tooltip showing provider, server location with flag, and IP address
 - **Omarchy Menu**: Adds LazyVPN entry to main Omarchy menu (`SUPER+ALT+SPACE`)
 - **Dedicated Keybinding**: `SUPER+L` (registered in Omarchy keybind help at `SUPER+K`)
 - **Desktop Notifications**: Clear notifications for connection events
