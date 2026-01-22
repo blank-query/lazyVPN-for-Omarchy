@@ -1,25 +1,19 @@
 # LazyVPN - Omarchy VPN Manager
 
-**LazyVPN** is an Omarchy VPN manager for WireGuard connections. It replaces manual `systemd-networkd` configuration with a fast, keyboard-driven TUI featuring killswitch, auto-recovery, and Waybar integration.
+**Effortless privacy for Omarchy Linux.**
+
+LazyVPN replaces manual network configuration with a fast, keyboard-driven interface. Browse thousands of servers, connect instantly, and stay protected with an ironclad killswitch—all without leaving your keyboard.
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
 - [Screenshots](#screenshots)
-- [Requirements](#requirements)
+- [Why LazyVPN?](#why-lazyvpn)
 - [Installation](#installation)
-- [Features](#features)
-  - [Dynamic Server Browser](#-dynamic-server-browser)
-  - [My Servers](#-my-servers)
-  - [Connection Management](#-connection-management)
-  - [Security & Privacy](#-security--privacy)
-  - [Automation](#-automation)
-  - [Testing](#-testing)
-  - [System Integration](#-system-integration)
-- [Usage & Menu Structure](#usage--menu-structure)
-- [Server Naming & Features](#server-naming--features)
-- [Technical Details](#technical-details)
-- [Uninstallation](#uninstallation)
+- [Dynamic Server Browser](#-dynamic-server-browser-new)
+- [Intelligent Server Naming](#-intelligent-server-naming)
+- [Security Architecture](#-security-architecture)
+- [Usage Guide](#usage--menu-structure)
 - [Troubleshooting](#troubleshooting)
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -28,17 +22,19 @@
 
 ## Quick Start
 
+**Get connected in 30 seconds:**
+
 ```bash
 git clone https://github.com/blank-query/lazyVPN-for-Omarchy.git
 cd lazyVPN-for-Omarchy
 ./install_lazyVPN.sh
 ```
 
-1. Press `SUPER+L` to open LazyVPN menu
-2. Select `Dynamic Server List` - you'll be prompted to set up a provider
-3. Load a WireGuard config file from your provider (credentials are extracted automatically)
-4. Browse thousands of servers, filter by features, and connect
-5. Your connection is verified with IP checks and DNS leak protection
+🚀 **That's it!** Press `SUPER+L` to launch the menu.
+
+1.  Select **Dynamic Server List**.
+2.  Load **one** WireGuard config from your provider to authenticate.
+3.  Instantly browse and connect to thousands of servers.
 
 ---
 
@@ -66,28 +62,28 @@ cd lazyVPN-for-Omarchy
 
 ---
 
+## Why LazyVPN?
+
+*   **⚡ Blazing Fast:** Built with `fzf` and `jaq` for instant server filtering and navigation.
+*   **🌐 No More Manual Configs:** The new **Dynamic Browser** lets you access your provider's entire fleet with just one setup step.
+*   **🛡️ Ironclad Security:** Firewall-based killswitch and kernel-level IPv6 leak protection that persist across reboots.
+*   **🎹 Keyboard Centric:** Navigate, filter, and connect entirely with hotkeys.
+*   **🧠 Smart Automation:** Auto-connects to the fastest server on boot and self-heals if the connection drops.
+*   **🎨 Beautiful Integration:** Seamlessly integrates with your Waybar and Omarchy desktop environment.
+
+---
+
 ## Requirements
 
-- **Omarchy Linux** (this tool is built specifically for Omarchy and will not work on other distributions)
-- VPN provider that supports WireGuard connections
+The installer automatically handles all software dependencies (`fzf`, `jaq`, `bc`, `iptables`, etc.).
 
-**Supported Providers**:
-- ProtonVPN (tested)
-- Mullvad
-- IVPN
-- PIA (Private Internet Access)
-- NordVPN
-- Surfshark
-- Windscribe
+**You only need:**
+- **Omarchy Linux** (Strictly required for system integration)
+- A VPN provider that supports WireGuard
 
-*Note: Only ProtonVPN has been thoroughly tested. Other providers should work but are untested. We'd love help testing - please [open an issue](https://github.com/blank-query/lazyVPN-for-Omarchy/issues) if you encounter problems with your provider.*
-
-**Dependencies** (auto-installed by installer):
-- `curl` - Speed tests and public IP detection
-- `bc` - Speed calculations
-- `iptables` - Killswitch functionality
-- `jaq` - Fast JSON processing for dynamic server browser
-- `fzf` - Interactive menus and server selection
+**Supported Providers:**
+✅ **ProtonVPN** (Verified & Recommended)
+🧪 **Mullvad, IVPN, PIA, NordVPN, Surfshark** (Experimental support - [Help us test!](https://github.com/blank-query/lazyVPN-for-Omarchy/issues))
 
 ---
 
@@ -99,199 +95,118 @@ cd lazyVPN-for-Omarchy
 ./install_lazyVPN.sh
 ```
 
-During installation, you'll be asked whether to enable **passwordless sudo** for VPN operations:
-- **Yes (default)**: Specific VPN commands (`networkctl`, `ip route`, `iptables`, systemd-networkd) run without password prompts
-- **No**: Password required for VPN operations (more secure for shared systems)
+During installation, you can choose to enable **passwordless sudo** for seamless VPN operations (recommended).
 
 ---
 
-## Features
+## 🌐 Dynamic Server Browser (New!)
 
-### 🌐 Dynamic Server Browser
+**Stop downloading hundreds of config files.**
 
-- **Provider Integration**: Configure your VPN provider once, browse thousands of servers instantly
-  - Server data sourced from [gluetun](https://github.com/qdm12/gluetun) (MIT License)
-  - 24-hour cache with on-demand refresh
+LazyVPN revolutionizes how you manage servers. Instead of cluttering your disk with static `.conf` files, you now have live access to your provider's network.
 
-- **Feature Filtering**:
-  - Filter by: P2P, Tor, Secure Core, Streaming, Free
-  - Multi-select uses AND logic (P2P + Streaming = servers with both)
-  - Switch providers without leaving the browser
+*   **One-Time Setup:** Authenticate once with a single config file.
+*   **Live Updates:** Server data is sourced from the excellent [gluetun](https://github.com/qdm12/gluetun) project (MIT License), ensuring robust and up-to-date server lists.
+*   **Powerful Filters:**
+    *   `1`-`5` : Toggle **P2P**, **Tor**, **Secure Core**, **Streaming**, **Free**
+    *   `6` : **Random Connect** (selects randomly from *currently filtered* list)
+    *   `7` : **Quickest** (tests latency of *currently filtered* servers)
+    *   `9` : **Favorite** (Star servers to save them to "My Servers")
 
-- **Hotkeys in Browser**:
-  - `Enter` - Connect to selected server
-  - `1-5` - Toggle feature filters (P2P, Tor, Secure Core, Streaming, Free)
-  - `6` - Connect to random server (from current filter)
-  - `7` - Connect to quickest server (latency test all filtered servers)
-  - `8` - Latency test all filtered servers (without connecting)
-  - `9` - Toggle favorite (adds to My Servers)
-  - `0` - Switch provider (if multiple configured)
+---
 
-- **Secure Core Display**: Shows both entry and exit countries
-  - `🇨🇭 Switzerland → 🇦🇷 Argentina (CH-AR#2) 🔒`
+## 🏷️ Intelligent Server Naming
 
-### 📁 My Servers
+LazyVPN automatically parses cryptic filenames and metadata to present clean, readable server names with feature indicators.
 
-Combines your **favorite dynamic servers** and **manually imported configs** in one place:
+| Raw Config Name | LazyVPN Display |
+|-----------------|-----------------|
+| `proton-us-ny-03` | 🇺🇸 United States - New York (US-NY#3) |
+| `se-sto-p2p-05` | 🇸🇪 Sweden - Stockholm (SE-STO#5) 🔄 |
+| `ch-us-01` | 🇨🇭 Switzerland → 🇺🇸 United States (CH-US#1) 🔒 |
 
-- **Favorites**: Star servers from the Dynamic Server Browser with `9` hotkey
-- **Manual Configs**: Import WireGuard `.conf` files via Settings → Import WireGuard Config
-- Quick access from main menu
+**Feature Indicators:**
+| Emoji | Feature |
+|-------|---------|
+| 🔄 | **P2P / Port Forward** |
+| 🔒 | **Secure Core** (Multi-Hop) |
+| 🧅 | **Tor Routing** |
+| 📺 | **Streaming Optimized** |
+| 🤡 | **Free Tier** |
+| ⭐ | **Favorite** |
 
-### 🔄 Connection Management
+---
 
-- **Connection Verification**:
-  - IP verification before and after connection
-  - Automatic failure detection if traffic not routing through VPN
-  - Intelligent retry logic with prompts
-  - Automatic cleanup of failed connections
+## 📁 My Servers
 
-- **Post-Connection Options**: After connecting, hotkeys for quick actions:
-  - `d` - DNS Leak Test (opens ipleak.net)
-  - `s` - Speedtest (10MB download test)
-  - `l` - Latency test (ping to server)
-  - `Enter` - Done
+Your personal dashboard combining:
+1.  **⭐ Favorites:** Servers you starred in the Dynamic Browser.
+2.  **📄 Manual Configs:** Custom WireGuard files you've imported manually.
 
-- **Seamless Server Switching**: Change servers without disconnecting - firewall rules update automatically before connecting to new server
+---
 
-### 🛡️ Security & Privacy
+## 🔐 Security Architecture
 
-- **Firewall Killswitch**:
-  - iptables-based killswitch blocks all traffic if VPN disconnects
-  - **Dynamic updates**: Automatically allows traffic to new VPN endpoint *before* connecting
-  - **Configurable local network access**: Toggle LAN device access (printers, NAS)
-  - **Disconnect behavior**: Three modes:
-    - `Auto`: Automatically disable killswitch on disconnect
-    - `Prompt`: Ask whether to disable
-    - `Never`: Keep killswitch active (internet blocked until reconnect)
-  - **Boot persistence**: Killswitch activates before network stack on reboot (zero leaks)
+LazyVPN is built on a "least privilege" security model, ensuring your system stays secure while offering the convenience of a TUI.
 
-- **🔁 Auto-Recover Daemon**:
-  - Background daemon monitors VPN connection health (10-second interval)
-  - 3-strike failure threshold before triggering reconnection
-  - **Auto-failover** (optional): After failed reconnects, switches to alternate server
-    - If killswitch active: picks random server (instant)
-    - If killswitch inactive: picks lowest latency server (tests all servers)
+### 1. Privilege Separation
+The core application runs as your normal user. Root access is strictly isolated to specific operations via the **`lazyvpn-file-helper`** script.
+- **Validated Operations:** The helper script strictly validates all inputs (paths, filenames, content) to prevent path traversal or symlink attacks.
+- **No Blanket Access:** The main application cannot modify arbitrary system files. It can only request the helper to write specific WireGuard configs to `/etc/systemd/network/`.
 
-- **🔒 IPv6 Leak Protection**: Blocks IPv6 traffic to prevent leaks (enabled by default)
+### 2. Credential Isolation
+Your sensitive data stays in your control.
+- **Private Keys:** Stored in `~/.config/lazyvpn/providers/` and `~/.config/lazyvpn/wireguard/` with **`chmod 600`** permissions (read/write only by you).
+- **Runtime Only:** Private keys are **never** stored permanently in global system directories. They are injected into ephemeral `systemd-networkd` runtime configurations only when you actively connect, and are removed upon disconnection.
 
-- **🗑️ Secure Deletion**:
-  - Provider setup offers to shred source config after extracting credentials
-  - Server configs shredded (3-pass overwrite) when removed
-  - Uninstaller offers secure deletion of all sensitive data
-  - Optional surgical removal of VPN-related system journal logs
-
-- **🔐 Security Architecture**:
-  - Input validation (path traversal, symlink attacks, injection prevention)
-  - Atomic file operations (prevents corruption from concurrent access)
-  - Secure file helper (privileged operations isolated in validated wrapper)
-
-### ⚙️ Automation
-
-- **🔌 Autoconnect on Boot**:
-  - Four modes: `Last Used`, `Fastest`, `Random`, or `Specific Server`
-  - `Fastest` tests latency to all servers (may take 30-60s with large server lists)
-  - Waits for network connectivity before connecting
-  - Fallback to random if killswitch blocks latency testing
-
-- **Provider Credentials**: Set up once, stored securely in `~/.config/lazyvpn/providers/`
-
-### 🧪 Testing
-
-Available from Settings menu when connected:
-
-- **Latency Test**: Ping test to current server endpoint
-- **Speedtest**: 10MB file download with real progress bar
-- **IP & DNS Leak Test**: Opens ipleak.net in browser for comprehensive external validation
-
-### ✨ System Integration
-
-- **Waybar Integration**: Status icon appears when connected
-  - Click to open LazyVPN menu
-  - Hover for tooltip showing provider, server location with flag, and IP address
-- **Omarchy Menu**: Adds LazyVPN entry to main Omarchy menu (`SUPER+ALT+SPACE`)
-- **Dedicated Keybinding**: `SUPER+L` (registered in Omarchy keybind help at `SUPER+K`)
-- **Desktop Notifications**: Clear notifications for connection events
-- **Passwordless Operation (Optional)**: Specific VPN commands only (not blanket sudo access)
+### 3. Restricted Sudo
+The installer configures `/etc/sudoers.d/lazyvpn` to allow passwordless execution **only** for a specific allowlist of commands required for VPN operation:
+- `networkctl` (to manage the interface)
+- `iptables` (to manage the killswitch firewall rules)
+- `lazyvpn-file-helper` (for secure file operations)
 
 ---
 
 ## Usage & Menu Structure
 
 **Open Menu**: `SUPER+L`
-**Navigate**: Arrow keys and Enter. Esc to go back or exit.
+**Navigate**: Arrow keys and Enter. Esc to go back.
 
-### Main Menu
+### 🛡️ Protection & Automation
+LazyVPN works silently in the background to keep you safe.
 
-#### When Disconnected:
-- **🌐 Dynamic Server List** → Browse and connect to provider servers
-- **📁 My Servers** → Your favorites and manual configs
-- **🔄 Reconnect** → Reconnect to last used server (if available)
-- **⚙️ Settings** → All configuration options
+*   **Firewall Killswitch:** Blocks all traffic if the VPN drops. Can be configured to allow local network (printer/NAS) access.
+*   **Auto-Recover:** Background daemon monitors connection health and reconnects automatically.
+*   **Auto-Failover:** If a server goes down, automatically switches to the next best server.
+*   **IPv6 Leak Protection:** Blocks IPv6 traffic at the kernel level to prevent leaks.
 
-#### When Connected:
-- **🔌 Disconnect** → Disconnect from VPN
-- **🌐 Dynamic Server List** → Switch to different server
-- **📁 My Servers** → Switch to favorite/manual server
-- **⚙️ Settings** → All configuration options
-
-### Settings Menu
-
-Unified fzf-based settings interface with all options:
-
-**Dynamic Server Providers**
-- Set Up Provider → Load a config file once to extract credentials
-- Refresh Server List → Re-download server data from providers
-
-**Protection**
-- Killswitch → Block all traffic if VPN disconnects
-- KS Local Network → Allow LAN when killswitch active
-- KS on Disconnect → Behavior when you manually disconnect
-- IPv6 Leak Protection → Disable IPv6 to prevent leaks
-
-**Automation**
-- Autoconnect on Startup → Connect to VPN when system boots
-- AC Startup Server → Which server to use (Last Used/Fastest/Random/Specific)
-- Auto-Recover Connection → Reconnect if connection drops
-- Auto-Failover → Try new server if current one fails
-
-**Manual Servers**
-- Import WireGuard Config → Add manual .conf files
-- Remove Server → Delete a manual server config
-
-**Testing** (only shown when connected)
-- Latency Test → Ping test to current server
-- Speedtest → Download speed test (10MB file)
-- IP & DNS Leak Test → Open ipleak.net in browser
-
-**Advanced**
-- WireGuard Interface → Change the network interface name
-- Uninstall LazyVPN → Remove LazyVPN and all settings
-- Show Tutorial → Learn how to use LazyVPN
-- Show Github → Open project page for help or issues
+### 🧪 Testing Tools
+Verify your privacy directly from the Settings menu:
+*   **Latency Test:** Ping check to current server.
+*   **Speedtest:** 10MB download test.
+*   **IP & DNS Leak:** Opens `ipleak.net` in your browser.
 
 ---
 
-## Server Naming & Features
+## ✨ Deep System Integration
 
-### Feature Emojis
+LazyVPN isn't just an app; it's part of your Omarchy desktop.
 
-LazyVPN displays server features with emoji indicators:
+*   **Waybar Status:** A custom module appears automatically when connected, showing your provider, location flag, and IP. Click to open the menu.
+*   **Omarchy Menu:** Fully integrated into the main system menu (`SUPER+ALT+SPACE`) with the native Omarchy visual style.
+*   **Keybinding Helper:** Automatically registers `SUPER+L` in the Omarchy keybinding cheat sheet (`SUPER+K`).
+*   **Desktop Notifications:** Native notifications for connection status and auto-recovery events.
 
-| Emoji | Feature |
-|-------|---------|
-| 🔄 | **P2P / Port Forward** |
-| 🔒 | **Secure Core** (multi-hop) |
-| 🧅 | **Tor Routing** |
-| 📺 | **Streaming Optimized** |
-| 🤡 | **Free Tier** |
-| ⭐ | **Favorite** (in My Servers) |
+---
 
-### Secure Core Servers
+## ⚡ Why WireGuard Only?
 
-Entry countries are always privacy-friendly jurisdictions (Switzerland 🇨🇭, Iceland 🇮🇸, or Sweden 🇸🇪) that route to your chosen exit country.
+LazyVPN exclusively supports **WireGuard**. We do not support OpenVPN, and here is why:
 
-Display format: `🇨🇭 Switzerland → 🇺🇸 United States (CH-US#5) 🔒`
+*   **Performance:** WireGuard runs in the Linux kernel, offering significantly higher throughput and lower CPU usage than OpenVPN.
+*   **Instant Connection:** WireGuard is stateless. Roaming between networks (WiFi/Ethernet) and connecting to servers is near-instantaneous.
+*   **Native Integration:** By using WireGuard, we can leverage `systemd-networkd` directly, avoiding heavy external daemons and ensuring rock-solid stability.
+*   **Simplicity:** WireGuard's modern codebase (~4k lines vs OpenVPN's 100k+) aligns with our philosophy of security and minimalism.
 
 ---
 
@@ -301,68 +216,32 @@ Display format: `🇨🇭 Switzerland → 🇺🇸 United States (CH-US#5) 🔒`
 **Firewall**: Custom iptables chains (`LAZYVPN_OUT` for IPv4/IPv6)
 **DNS**: Integrates with `systemd-resolved` for DNS privacy
 **Privilege Model**: Minimal sudo scope via `/etc/sudoers.d/lazyvpn`
-**Provider Detection**: Auto-detected from config file by DNS server IP (e.g., 10.2.0.1 = ProtonVPN), with fallback to endpoint domain
 
 **Configuration Files**:
 - Settings: `~/.config/lazyvpn/config`
-- Manual server configs: `~/.config/lazyvpn/wireguard/*.conf`
-- Provider credentials: `~/.config/lazyvpn/providers/*.conf`
-- Dynamic server cache: `~/.config/lazyvpn/cache/*_servers.json`
-- Favorites: `~/.config/lazyvpn/favorites`
-- Auto-recover log: `~/.config/lazyvpn/auto-recover.log`
+- Manual server configs: `~/.config/lazyvpn/wireguard/*.conf` (chmod 600)
+- Provider credentials: `~/.config/lazyvpn/providers/*.conf` (chmod 600)
 
 ---
 
 ## Uninstallation
 
-**Access**:
-- Run `lazyvpn-uninstall` from terminal
-- Or: Settings → Uninstall LazyVPN
+To remove LazyVPN and all associated files:
+`lazyvpn-uninstall` (or via Settings menu)
 
-**Features**:
-- Auto-disconnects if connected
-- Stops auto-recover daemon
-
-**Secure Deletion** (with confirmation prompts):
-- **Always deleted** (shredded with 3-pass overwrite):
-  - Provider credentials (private keys)
-  - LazyVPN config files
-  - systemd-networkd files
-  - Shell history (VPN commands removed)
-- **User choice**:
-  - Manual server configs (private keys)
-  - System journal logs (surgical removal)
-
-**Removed**:
-- All LazyVPN scripts
-- Firewall killswitch rules
-- Sudoers configuration
-- Desktop integrations (menu entries, autostart, keybindings)
+**Secure Deletion:**
+You will be prompted to securely shred credential files, config files, and sanitize shell history.
 
 ---
 
 ## Troubleshooting
 
 **Killswitch blocks all traffic**
-- Check killswitch configuration in Settings
-- **Disable temporarily**: `lazyvpn-disable-killswitch` from terminal
-- Verify disconnect behavior setting isn't set to "Never"
-
-**Can't access local network (printer, NAS) while connected**
-- Settings → KS Local Network → Enable
-
-**Auto-recover daemon not working**
-- Check status in Settings → Auto-Recover Connection
-- View logs: `cat ~/.config/lazyvpn/auto-recover.log`
-- Verify daemon running: `pgrep -f lazyvpn-auto-recover-daemon`
+- Check "KS on Disconnect" setting. If set to "Never", internet remains blocked until you reconnect.
+- **Emergency Disable**: Run `lazyvpn-disable-killswitch` from terminal.
 
 **Provider setup shows "Invalid or sanitized private key"**
-- ProtonVPN: Re-downloading an existing config gives a sanitized key - you must generate a new config
-- Other providers may have similar behavior
-
-**Provider setup not working**
-- Ensure you have a WireGuard config file from your VPN provider
-- Check provider credentials in `~/.config/lazyvpn/providers/`
+- ProtonVPN: Re-downloading an existing config gives a sanitized key (`****`). You must generate a **new** config from the Proton dashboard.
 
 ---
 
@@ -376,15 +255,15 @@ Display format: `🇨🇭 Switzerland → 🇺🇸 United States (CH-US#5) 🔒`
 
 ---
 
-## License
-
-MIT License - Copyright (c) 2025 blank-query
-
----
-
 ## Previous Version
 
 The previous version of LazyVPN (without dynamic server browser) is preserved in the `old-stable` branch.
+
+---
+
+## License
+
+MIT License - Copyright (c) 2025 blank-query
 
 ---
 
