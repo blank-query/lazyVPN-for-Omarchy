@@ -42,6 +42,11 @@ cd lazyVPN-for-Omarchy
 
 ### Main Menu
 ![Main Menu - Disconnected](images/01-main-menu-disconnected.png)
+
+<details>
+<summary><b>View More Screenshots</b></summary>
+
+### Main Menu (Connected)
 ![Main Menu - Connected](images/04-main-menu-connected.png)
 
 ### Dynamic Server Browser
@@ -59,6 +64,8 @@ cd lazyVPN-for-Omarchy
 
 ### Waybar Integration
 ![Waybar Tooltip](waybar-tooltip.png)
+
+</details>
 
 ---
 
