@@ -80,6 +80,7 @@ The installer automatically handles all software dependencies (`fzf`, `jaq`, `bc
 **You only need:**
 - **Omarchy Linux** (Strictly required for system integration)
 - A VPN provider that supports WireGuard
+- An internet connection
 
 **Supported Providers:**
 ✅ **ProtonVPN** (Verified & Recommended)
@@ -111,7 +112,7 @@ LazyVPN revolutionizes how you manage servers. Instead of cluttering your disk w
     *   `1`-`5` : Toggle **P2P**, **Tor**, **Secure Core**, **Streaming**, **Free**
     *   `6` : **Random Connect** (selects randomly from *currently filtered* list)
     *   `7` : **Quickest** (tests latency of *currently filtered* servers)
-    *   `9` : **Favorite** (Star servers to save them to "My Servers")
+    *   `9` : **Favorite** (Star the best servers to save them to "My Servers")
 
 ---
 
@@ -164,6 +165,12 @@ The installer configures `/etc/sudoers.d/lazyvpn` to allow passwordless executio
 - `networkctl` (to manage the interface)
 - `iptables` (to manage the killswitch firewall rules)
 - `lazyvpn-file-helper` (for secure file operations)
+
+### 4. Zero Unexpected Traffic
+**You are in control.** LazyVPN never initiates network traffic without your explicit command.
+- **No Phone Home:** It does not check for updates, send telemetry, or report usage statistics.
+- **On-Demand Only:** Server lists are only refreshed when you explicitly run the fetch command or select "Refresh" in the menu.
+- **No Background Chatter:** The auto-recover daemon only pings your VPN endpoint to check connectivity; it sends no other data.
 
 ---
 
@@ -248,8 +255,8 @@ You will be prompted to securely shred credential files, config files, and sanit
 ## Roadmap
 
 ### Planned Features
-- Encrypted configuration storage for `.conf` files
-- Support for additional VPN providers
+- Encrypted configuration storage for server/provider confs containing private keys.
+- Expanded support for additional VPN providers.
 
 **Suggestions welcome!** Open an issue on GitHub.
 
