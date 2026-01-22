@@ -267,8 +267,75 @@ else
 fi
 echo ""
 
-# --- Step 5: Remove LazyVPN from PATH ---
-echo "Step 5: Removing LazyVPN from PATH..."
+# --- Step 5: Remove Waybar integration ---
+echo "Step 5: Removing Waybar integration..."
+
+WAYBAR_CONFIG="$HOME/.config/waybar/config.jsonc"
+WAYBAR_STYLE="$HOME/.config/waybar/style.css"
+
+if [[ -f "$WAYBAR_CONFIG" ]]; then
+  if grep -q "custom/lazyvpn" "$WAYBAR_CONFIG"; then
+    # Use a single awk script to safely remove lazyvpn from waybar config
+    # This removes it from modules-right array AND removes the module definition
+    awk '
+      # Track if we are inside modules-right array
+      /"modules-right"/ { in_modules_right = 1 }
+
+      # Remove custom/lazyvpn from modules-right array only
+      in_modules_right && /"custom\/lazyvpn"/ {
+        gsub(/, "custom\/lazyvpn"/, "")
+        gsub(/"custom\/lazyvpn", /, "")
+        gsub(/"custom\/lazyvpn"/, "")
+      }
+
+      # Closing bracket ends the modules-right array
+      in_modules_right && /\]/ { in_modules_right = 0 }
+
+      # Skip the custom/lazyvpn module definition block entirely
+      /^[[:space:]]*,?"custom\/lazyvpn": \{/ {
+        brace_count = 1
+        while (brace_count > 0 && (getline) > 0) {
+          if (/\{/) brace_count++
+          if (/\}/) brace_count--
+        }
+        next
+      }
+
+      { print }
+    ' "$WAYBAR_CONFIG" > "$WAYBAR_CONFIG.tmp" && mv "$WAYBAR_CONFIG.tmp" "$WAYBAR_CONFIG"
+
+    echo "  - Removed custom/lazyvpn from Waybar config"
+
+    # Reload waybar if running
+    if pgrep -x waybar > /dev/null; then
+      pkill -SIGUSR2 waybar 2>/dev/null || true
+      echo "  - Sent reload signal to Waybar"
+    fi
+  else
+    echo "  - No LazyVPN integration found in Waybar config"
+  fi
+else
+  echo "  - Waybar config not found"
+fi
+
+# Remove CSS styling
+if [[ -f "$WAYBAR_STYLE" ]]; then
+  if grep -q "#custom-lazyvpn" "$WAYBAR_STYLE"; then
+    # Remove the LazyVPN CSS block (comment + rule)
+    sed -i '/\/\* LazyVPN status indicator \*\//,/^}$/d' "$WAYBAR_STYLE"
+    # Also try alternate pattern without closing brace on own line
+    sed -i '/#custom-lazyvpn {/,/}/d' "$WAYBAR_STYLE"
+    echo "  - Removed LazyVPN styling from Waybar CSS"
+  else
+    echo "  - No LazyVPN styling found in Waybar CSS"
+  fi
+else
+  echo "  - Waybar style.css not found"
+fi
+echo ""
+
+# --- Step 6: Remove LazyVPN from PATH ---
+echo "Step 6: Removing LazyVPN from PATH..."
 SHELL_RC=""
 if [[ -n "$BASH_VERSION" ]]; then
   SHELL_RC="$HOME/.bashrc"
@@ -290,8 +357,8 @@ else
 fi
 echo ""
 
-# --- Step 6: Remove Autostart entry ---
-echo "Step 6: Removing Autostart entry..."
+# --- Step 7: Remove Autostart entry ---
+echo "Step 7: Removing Autostart entry..."
 if [[ -f "$AUTOSTART_FILE" ]]; then
   rm -f "$AUTOSTART_FILE"
   echo "  - Removed autostart file."
@@ -300,8 +367,8 @@ else
 fi
 echo ""
 
-# --- Step 7: Stop auto-recover daemon if running ---
-echo "Step 7: Stopping auto-recover daemon..."
+# --- Step 8: Stop auto-recover daemon if running ---
+echo "Step 8: Stopping auto-recover daemon..."
 AUTO_RECOVER_PID_FILE="$CONFIG_DIR/.auto-recover.pid"
 if [[ -f "$AUTO_RECOVER_PID_FILE" ]]; then
   AUTO_RECOVER_PID=$(cat "$AUTO_RECOVER_PID_FILE" 2>/dev/null)
@@ -317,8 +384,8 @@ else
 fi
 echo ""
 
-# --- Step 8: Securely Remove Performance History ---
-echo "Step 8: Securely removing performance history..."
+# --- Step 9: Securely Remove Performance History ---
+echo "Step 9: Securely removing performance history..."
 PERF_DIR="$CONFIG_DIR/performance"
 if [[ -d "$PERF_DIR" ]] && ls "$PERF_DIR"/*.log 1>/dev/null 2>&1; then
   echo "  - Performance history contains usage metadata. Securely deleting..."
@@ -342,8 +409,8 @@ else
 fi
 echo ""
 
-# --- Step 9: Securely Remove LazyVPN Config Files ---
-echo "Step 9: Securely removing LazyVPN configuration files..."
+# --- Step 10: Securely Remove LazyVPN Config Files ---
+echo "Step 10: Securely removing LazyVPN configuration files..."
 if [[ ! -d "$CONFIG_DIR" ]]; then
   echo "  - Configuration directory not found."
 else
@@ -408,8 +475,8 @@ else
 fi
 echo ""
 
-# --- Step 10: Clean up systemd-networkd files ---
-echo "Step 10: Cleaning up systemd-networkd configuration..."
+# --- Step 11: Clean up systemd-networkd files ---
+echo "Step 11: Cleaning up systemd-networkd configuration..."
 NETDEV_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.netdev"
 NETWORK_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.network"
 
@@ -446,8 +513,8 @@ else
 fi
 echo ""
 
-# --- Step 11: Remove sudoers configuration ---
-echo "Step 11: Removing sudoers configuration..."
+# --- Step 12: Remove sudoers configuration ---
+echo "Step 12: Removing sudoers configuration..."
 if sudo test -f /etc/sudoers.d/lazyvpn; then
   if sudo rm -f /etc/sudoers.d/lazyvpn; then
     # Verify it's actually gone
@@ -466,8 +533,8 @@ else
 fi
 echo ""
 
-# --- Step 12: Clean up system logs (surgical approach) ---
-echo "Step 12: System log cleanup (optional)..."
+# --- Step 13: Clean up system logs (surgical approach) ---
+echo "Step 13: System log cleanup (optional)..."
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  Privacy Note: System Logs"
@@ -607,8 +674,8 @@ else
 fi
 echo ""
 
-# --- Step 13: Clean up shell history ---
-echo "Step 13: Cleaning shell history..."
+# --- Step 14: Clean up shell history ---
+echo "Step 14: Cleaning shell history..."
 echo ""
 echo "Removing VPN-related commands from shell history files..."
 

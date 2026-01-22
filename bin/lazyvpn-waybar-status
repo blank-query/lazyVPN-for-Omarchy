@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# LazyVPN Waybar Status Script
+# Outputs JSON for waybar custom module
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" 2>/dev/null || exit 1
+
+# Load config to get CONNECTION_NAME, LAST_CONNECTED_SERVER, LAST_PUBLIC_IP
+load_config
+
+if is_connected "$CONNECTION_NAME"; then
+    # Parse server name - handle dynamic:provider:server format
+    server="$LAST_CONNECTED_SERVER"
+    provider=""
+
+    if [[ "$server" == dynamic:* ]]; then
+        # Dynamic server: dynamic:protonvpn:US-DC#30
+        IFS=':' read -r _ provider server <<< "$LAST_CONNECTED_SERVER"
+        # Prettify provider name
+        case "$provider" in
+            protonvpn) provider="ProtonVPN" ;;
+            mullvad) provider="Mullvad" ;;
+            ivpn) provider="IVPN" ;;
+            nordvpn) provider="NordVPN" ;;
+            *) provider="${provider^}" ;;  # Capitalize first letter
+        esac
+    fi
+
+    # Build pretty server name with flag
+    # Parse: US-DC#30 -> country=US, location=DC, number=30
+    pretty_name=""
+    if [[ "$server" =~ ^([A-Z]{2})-?([A-Za-z0-9-]*)?#?([0-9]*)$ ]]; then
+        country="${BASH_REMATCH[1]}"
+        location="${BASH_REMATCH[2]}"
+        number="${BASH_REMATCH[3]}"
+
+        flag=$(country_flag "$country")
+        country_name=$(expand_country_name "$country")
+
+        if [[ -n "$location" ]]; then
+            location_name=$(expand_location_name "$location")
+            pretty_name="$flag $country_name - $location_name"
+        else
+            pretty_name="$flag $country_name"
+        fi
+
+        if [[ -n "$number" ]]; then
+            pretty_name="$pretty_name (#$number)"
+        fi
+    else
+        # Fallback to raw server name
+        pretty_name="$server"
+    fi
+
+    # Build tooltip: Provider\nPretty Name\nIP
+    tooltip="$provider\\n$pretty_name\\n${LAST_PUBLIC_IP:-unknown}"
+
+    # Escape quotes in tooltip for JSON
+    tooltip="${tooltip//\"/\\\"}"
+    echo "{\"text\": \"󰖂\", \"tooltip\": \"$tooltip\"}"
+else
+    echo "{\"text\": \"\", \"tooltip\": \"VPN Disconnected\"}"
+fi
