@@ -72,8 +72,8 @@ if [[ ! -f "$CACHE_FILE" ]]; then
   error "Server cache not found. Run: lazyvpn-fetch-servers $PROVIDER"
 fi
 
-# Find server in cache
-SERVER_JSON=$(jq --arg name "$SERVER_NAME" '.[] | select(.server_name == $name)' "$CACHE_FILE" 2>/dev/null)
+# Find server in cache (search by server_name or hostname for providers like Mullvad)
+SERVER_JSON=$(jq --arg name "$SERVER_NAME" '.[] | select((.server_name // .hostname) == $name)' "$CACHE_FILE" 2>/dev/null)
 
 if [[ -z "$SERVER_JSON" ]] || [[ "$SERVER_JSON" == "null" ]]; then
   error "Server not found in cache: $SERVER_NAME"

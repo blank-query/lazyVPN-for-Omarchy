@@ -120,12 +120,12 @@ stream_server_list() {
   # Single-pass jaq extracts all fields at once, outputs tab-separated
   # Format: country_code\tcountry\tcity\tserver_name\thostname\tfeatures\tis_secure_core
   jaq -r "$jaq_cmd | [
-    (if .server_name | test(\"^[A-Z]{2}[-#]\") then .server_name[0:2] else
+    (if (.server_name // \"\") | test(\"^[A-Z]{2}[-#]\") then .server_name[0:2] else
      if .hostname | test(\"^[a-z]{2}[-\\\\.]\") then (.hostname[0:2] | ascii_upcase) else \"\" end
      end),
     .country,
     (.city // \"\"),
-    .server_name,
+    (.server_name // .hostname),
     .hostname,
     ((if .port_forward then \"🔄\" else \"\" end) +
      (if .tor then \"🧅\" else \"\" end) +
@@ -231,7 +231,7 @@ EOF
   # Format: current_provider followed by list of all providers
   {
     echo "current=$provider"
-    echo "providers=${providers[*]}"
+    echo "providers=\"${providers[*]}\""
   } > "$provider_state"
 
   # Preview script - searches across all provider caches
@@ -239,6 +239,17 @@ EOF
 #!/bin/bash
 IFS='|' read -r display server_name provider_key <<< "$1"
 CACHE_DIR="$2"
+
+# Provider display names
+declare -A PNAMES=(
+  [protonvpn]="ProtonVPN"
+  [mullvad]="Mullvad"
+  [ivpn]="IVPN"
+  [pia]="Private Internet Access"
+  [nordvpn]="NordVPN"
+  [surfshark]="Surfshark"
+  [windscribe]="Windscribe"
+)
 
 # Find the server in provider cache
 CACHE_FILE="$CACHE_DIR/${provider_key}_servers.json"
@@ -266,7 +277,8 @@ features=""
 [[ "$free" == "true" ]] && features+="🤡 Free"
 [[ -z "$features" ]] && features="Standard"
 
-echo "┌─ $server_name"
+provider_display="${PNAMES[$provider_key]:-$provider_key}"
+echo "┌─ $server_name • $provider_display"
 echo "│"
 if [[ "$sc" == "true" ]]; then
   if [[ "$server_name" =~ ^([A-Z]{2})-([A-Z]{2})# ]]; then
@@ -512,12 +524,12 @@ output_servers() {
   local provider_key="$2"
 
   jaq -r "$jaq_cmd | [
-    (if .server_name | test(\"^[A-Z]{2}[-#]\") then .server_name[0:2] else
+    (if (.server_name // \"\") | test(\"^[A-Z]{2}[-#]\") then .server_name[0:2] else
      if .hostname | test(\"^[a-z]{2}[-\\\\.]\") then (.hostname[0:2] | ascii_upcase) else \"\" end
      end),
     .country,
     (.city // \"\"),
-    .server_name,
+    (.server_name // .hostname),
     .hostname,
     ((if .port_forward then \"🔄\" else \"\" end) +
      (if .tor then \"🧅\" else \"\" end) +
@@ -564,10 +576,13 @@ output_servers() {
 
 # Output servers based on current provider selection
 if [[ "$current" == "ALL" ]]; then
-  for p in $providers; do
-    cache="$CACHE_DIR/${p}_servers.json"
-    [[ -f "$cache" ]] && output_servers "$cache" "$p"
-  done
+  # Collect all servers and sort alphabetically
+  {
+    for p in $providers; do
+      cache="$CACHE_DIR/${p}_servers.json"
+      [[ -f "$cache" ]] && output_servers "$cache" "$p"
+    done
+  } | sort -t'|' -k1,1
 else
   cache="$CACHE_DIR/${current}_servers.json"
   [[ -f "$cache" ]] && output_servers "$cache" "$current"

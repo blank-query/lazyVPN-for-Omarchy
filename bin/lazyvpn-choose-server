@@ -102,10 +102,22 @@ if [[ "$type" == "dynamic" ]]; then
   server_name="$arg2"
   cache_file="$CACHE_DIR/${provider}_servers.json"
 
+  # Provider display names
+  declare -A PNAMES=(
+    [protonvpn]="ProtonVPN"
+    [mullvad]="Mullvad"
+    [ivpn]="IVPN"
+    [pia]="Private Internet Access"
+    [nordvpn]="NordVPN"
+    [surfshark]="Surfshark"
+    [windscribe]="Windscribe"
+  )
+  provider_display="${PNAMES[$provider]:-$provider}"
+
   if [[ -f "$cache_file" ]]; then
+    echo "Provider: $provider_display"
     jaq -r --arg name "$server_name" '
       .[] | select((.server_name // .hostname) == $name) |
-      "Provider: \(.provider // "Unknown")",
       "Country: \(.country)",
       "City: \(.city // "N/A")",
       "IP: \(.ips[0] // "N/A")",

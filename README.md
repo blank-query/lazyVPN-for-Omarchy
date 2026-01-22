@@ -90,8 +90,9 @@ The installer automatically handles all software dependencies (`fzf`, `jaq`, `bc
 - An internet connection
 
 **Supported Providers:**
-✅ **ProtonVPN** (Verified & Recommended)
-🧪 **Mullvad, IVPN, PIA, NordVPN, Surfshark** (Experimental support - [Help us test!](https://github.com/blank-query/lazyVPN-for-Omarchy/issues))
+✅ **ProtonVPN** (Verified & Recommended - has free tier)
+🧪 **Mullvad** (Lightly tested - should work)
+🧪 **IVPN, PIA, NordVPN, Surfshark** (Experimental - [Help us test!](https://github.com/blank-query/lazyVPN-for-Omarchy/issues))
 
 ---
 
@@ -120,6 +121,8 @@ LazyVPN revolutionizes how you manage servers. Instead of cluttering your disk w
     *   `6` : **Random Connect** (selects randomly from *currently filtered* list)
     *   `7` : **Quickest** (tests latency of *currently filtered* servers)
     *   `9` : **Favorite** (Star the best servers to save them to "My Servers")
+
+> **Note:** Feature filters work best with ProtonVPN. Mullvad does not publish per-server feature data, so their servers won't appear when filtering by P2P, Tor, etc. (Mullvad supports port forwarding globally via their API, not per-server.)
 
 ---
 
