@@ -1,6 +1,6 @@
-# LazyVPN
+# LazyVPN - Omarchy VPN Manager
 
-**LazyVPN** is a powerful, script-based utility for managing WireGuard VPN connections, built for Omarchy Linux. It replaces manual `systemd-networkd` configuration with a fast, keyboard-driven TUI.
+**LazyVPN** is an Omarchy VPN manager for WireGuard connections. It replaces manual `systemd-networkd` configuration with a fast, keyboard-driven TUI featuring killswitch, auto-recovery, and Waybar integration.
 
 ## Table of Contents
 
