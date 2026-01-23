@@ -2,10 +2,14 @@
 
 # Get detailed server information from WireGuard config
 
+# Source common functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" || exit 1
+# shellcheck source=./lazyvpn-common
+
 SERVER_NAME="$1"
 
 # Validate server name to prevent path traversal
-# shellcheck source=./lazyvpn-common
 if [[ ! "$SERVER_NAME" =~ ^[a-zA-Z0-9._#-]+$ ]]; then
   echo "error=Invalid server name"
   exit 1
@@ -33,62 +37,12 @@ server_port=$(echo "$endpoint" | cut -d: -f2)
 # Try to extract DNS servers
 dns=$(grep -m1 "^DNS" "$CONFIG_FILE" | cut -d= -f2 | tr -d ' ')
 
-# Detect VPN provider
-provider=""
-
-# Method 1: Check filename prefix
-if [[ "$SERVER_NAME" =~ ^(proton|mullvad|ivpn|pia|nordvpn|surfshark|expressvpn|windscribe)- ]]; then
-  case "${BASH_REMATCH[1],,}" in
-    proton) provider="ProtonVPN" ;;
-    mullvad) provider="Mullvad" ;;
-    ivpn) provider="IVPN" ;;
-    pia) provider="PIA" ;;
-    nordvpn) provider="NordVPN" ;;
-    surfshark) provider="Surfshark" ;;
-    expressvpn) provider="ExpressVPN" ;;
-    windscribe) provider="Windscribe" ;;
-  esac
-fi
-
-# Method 2: Check endpoint domain if no prefix found
+# Detect VPN provider (check filename first, then config contents)
+provider=$(detect_provider_from_name "$SERVER_NAME")
 if [[ -z "$provider" ]]; then
-  if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]]; then
-    provider="ProtonVPN"
-  elif [[ "$endpoint" =~ mullvad\.net ]]; then
-    provider="Mullvad"
-  elif [[ "$endpoint" =~ ivpn\.net ]]; then
-    provider="IVPN"
-  elif [[ "$endpoint" =~ privateinternetaccess\.com ]]; then
-    provider="PIA"
-  elif [[ "$endpoint" =~ nordvpn\.com ]]; then
-    provider="NordVPN"
-  elif [[ "$endpoint" =~ surfshark\.com ]]; then
-    provider="Surfshark"
-  elif [[ "$endpoint" =~ expressvpn\.com ]]; then
-    provider="ExpressVPN"
-  elif [[ "$endpoint" =~ windscribe\.com ]]; then
-    provider="Windscribe"
-  fi
-fi
-
-# Method 3: Check DNS servers if still unknown
-if [[ -z "$provider" && -n "$dns" ]]; then
-  case "$dns" in
-    10.2.0.1) provider="ProtonVPN" ;;
-    10.64.0.1|193.138.218.74) provider="Mullvad" ;;
-    172.16.0.1) provider="IVPN" ;;
-    10.0.0.241|10.0.0.242) provider="PIA" ;;
-  esac
-fi
-
-# Method 4: Check comments in config file
-if [[ -z "$provider" ]]; then
-  if grep -qi "protonvpn" "$CONFIG_FILE"; then
-    provider="ProtonVPN"
-  elif grep -qi "mullvad" "$CONFIG_FILE"; then
-    provider="Mullvad"
-  elif grep -qi "ivpn" "$CONFIG_FILE"; then
-    provider="IVPN"
+  local_id=$(detect_provider "$CONFIG_FILE")
+  if [[ -n "$local_id" ]]; then
+    provider="${PROVIDER_DISPLAY[$local_id]}"
   fi
 fi
 

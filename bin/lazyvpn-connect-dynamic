@@ -18,27 +18,6 @@ if ! command -v jq &>/dev/null; then
   error "jq is required but not installed. Install with: sudo pacman -S jq"
 fi
 
-# Provider-specific defaults
-declare -A PROVIDER_DNS=(
-  [protonvpn]="10.2.0.1"
-  [mullvad]="10.64.0.1"
-  [ivpn]="172.16.0.1"
-  [pia]="10.0.0.241"
-  [nordvpn]="103.86.96.100"
-  [surfshark]="162.252.172.57"
-  [windscribe]="10.255.255.1"
-)
-
-declare -A PROVIDER_PORT=(
-  [protonvpn]="51820"
-  [mullvad]="51820"
-  [ivpn]="2049"
-  [pia]="1337"
-  [nordvpn]="51820"
-  [surfshark]="51820"
-  [windscribe]="443"
-)
-
 # Usage
 if [[ -z "$1" ]] || [[ -z "$2" ]]; then
   echo "Usage: lazyvpn-connect-dynamic PROVIDER SERVER_NAME"

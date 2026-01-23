@@ -26,27 +26,6 @@ if ! command -v jq &>/dev/null; then
   error "jq is required but not installed. Install with: sudo pacman -S jq"
 fi
 
-# Provider name mappings (gluetun uses different names)
-declare -A GLUETUN_PROVIDER_MAP=(
-  [protonvpn]="protonvpn"
-  [mullvad]="mullvad"
-  [ivpn]="ivpn"
-  [pia]="private internet access"
-  [nordvpn]="nordvpn"
-  [surfshark]="surfshark"
-  [windscribe]="windscribe"
-)
-
-# Provider display names
-declare -A PROVIDER_DISPLAY=(
-  [protonvpn]="ProtonVPN"
-  [mullvad]="Mullvad"
-  [ivpn]="IVPN"
-  [pia]="Private Internet Access"
-  [nordvpn]="NordVPN"
-  [surfshark]="Surfshark"
-  [windscribe]="Windscribe"
-)
 
 # Fetch raw server data
 fetch_raw_servers() {

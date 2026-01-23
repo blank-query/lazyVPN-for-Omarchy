@@ -23,17 +23,6 @@ if ! command -v fzf &>/dev/null; then
   error "fzf is required but not installed. Install with: sudo pacman -S fzf"
 fi
 
-# Provider display names
-declare -A PROVIDER_DISPLAY=(
-  [protonvpn]="ProtonVPN"
-  [mullvad]="Mullvad"
-  [ivpn]="IVPN"
-  [pia]="Private Internet Access"
-  [nordvpn]="NordVPN"
-  [surfshark]="Surfshark"
-  [windscribe]="Windscribe"
-)
-
 # Regional indicator symbols for flag emoji (A-Z)
 # Pure bash lookup - no subshells needed
 declare -A RI=(

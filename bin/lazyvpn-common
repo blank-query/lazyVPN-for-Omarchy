@@ -23,6 +23,148 @@ notify() {
     notify-send "LazyVPN" "$1"
 }
 
+# ══════════════════════════════════════════════════════════
+# Provider Definitions (Single Source of Truth)
+# ══════════════════════════════════════════════════════════
+
+# Display names for UI
+declare -A PROVIDER_DISPLAY=(
+    [protonvpn]="ProtonVPN"
+    [mullvad]="Mullvad"
+    [ivpn]="IVPN"
+    [pia]="Private Internet Access"
+    [nordvpn]="NordVPN"
+    [surfshark]="Surfshark"
+    [windscribe]="Windscribe"
+)
+
+# Short prefixes for filenames (e.g., Proton-US-NY#1.conf)
+declare -A PROVIDER_PREFIX=(
+    [protonvpn]="Proton"
+    [mullvad]="Mullvad"
+    [ivpn]="IVPN"
+    [pia]="PIA"
+    [nordvpn]="Nord"
+    [surfshark]="Surf"
+    [windscribe]="Windscribe"
+)
+
+# Default DNS servers per provider
+declare -A PROVIDER_DNS=(
+    [protonvpn]="10.2.0.1"
+    [mullvad]="10.64.0.1"
+    [ivpn]="172.16.0.1"
+    [pia]="10.0.0.241"
+    [nordvpn]="103.86.96.100"
+    [surfshark]="162.252.172.57"
+    [windscribe]="10.255.255.1"
+)
+
+# Default WireGuard ports per provider
+declare -A PROVIDER_PORT=(
+    [protonvpn]="51820"
+    [mullvad]="51820"
+    [ivpn]="2049"
+    [pia]="1337"
+    [nordvpn]="51820"
+    [surfshark]="51820"
+    [windscribe]="443"
+)
+
+# Gluetun provider name mappings (gluetun uses different identifiers)
+declare -A GLUETUN_PROVIDER_MAP=(
+    [protonvpn]="protonvpn"
+    [mullvad]="mullvad"
+    [ivpn]="ivpn"
+    [pia]="private internet access"
+    [nordvpn]="nordvpn"
+    [surfshark]="surfshark"
+    [windscribe]="windscribe"
+)
+
+# Detect VPN provider from a WireGuard config file
+# Returns the internal provider ID (e.g., "protonvpn", "mullvad")
+# Usage: provider=$(detect_provider "/path/to/config.conf")
+detect_provider() {
+    local config_file="$1"
+    local provider=""
+
+    # Method 1: DNS server detection (most reliable)
+    local dns
+    dns=$(grep -i "^DNS" "$config_file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r')
+
+    case "$dns" in
+        10.2.0.1) provider="protonvpn" ;;
+        10.64.0.1|193.138.218.74) provider="mullvad" ;;
+        172.16.0.1) provider="ivpn" ;;
+        10.0.0.241|10.0.0.242) provider="pia" ;;
+    esac
+
+    # Method 2: Endpoint domain detection
+    if [[ -z "$provider" ]]; then
+        local endpoint
+        endpoint=$(grep -i "^Endpoint" "$config_file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r')
+
+        if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]]; then
+            provider="protonvpn"
+        elif [[ "$endpoint" =~ mullvad\.net ]]; then
+            provider="mullvad"
+        elif [[ "$endpoint" =~ ivpn\.net ]]; then
+            provider="ivpn"
+        elif [[ "$endpoint" =~ privateinternetaccess\.com ]]; then
+            provider="pia"
+        elif [[ "$endpoint" =~ nordvpn\.com ]]; then
+            provider="nordvpn"
+        elif [[ "$endpoint" =~ surfshark\.com ]]; then
+            provider="surfshark"
+        elif [[ "$endpoint" =~ windscribe\.com ]]; then
+            provider="windscribe"
+        fi
+    fi
+
+    # Method 3: Config file comments
+    if [[ -z "$provider" ]]; then
+        if grep -qi "protonvpn" "$config_file"; then
+            provider="protonvpn"
+        elif grep -qi "mullvad" "$config_file"; then
+            provider="mullvad"
+        elif grep -qi "ivpn" "$config_file"; then
+            provider="ivpn"
+        elif grep -qi "nordvpn" "$config_file"; then
+            provider="nordvpn"
+        elif grep -qi "surfshark" "$config_file"; then
+            provider="surfshark"
+        fi
+    fi
+
+    echo "$provider"
+}
+
+# Detect provider from a server filename prefix
+# Returns display name (e.g., "ProtonVPN", "Mullvad")
+# Usage: provider_name=$(detect_provider_from_name "Proton-US-NY#1")
+detect_provider_from_name() {
+    local server_name="$1"
+
+    if [[ "$server_name" =~ ^(Proton|proton)- ]]; then
+        echo "ProtonVPN"
+    elif [[ "$server_name" =~ ^(Mullvad|mullvad)- ]]; then
+        echo "Mullvad"
+    elif [[ "$server_name" =~ ^(IVPN|ivpn)- ]]; then
+        echo "IVPN"
+    elif [[ "$server_name" =~ ^(PIA|pia)- ]]; then
+        echo "PIA"
+    elif [[ "$server_name" =~ ^(Nord|nord|nordvpn)- ]]; then
+        echo "NordVPN"
+    elif [[ "$server_name" =~ ^(Surf|surf|surfshark)- ]]; then
+        echo "Surfshark"
+    elif [[ "$server_name" =~ ^(Windscribe|windscribe)- ]]; then
+        echo "Windscribe"
+    fi
+}
+
+# ══════════════════════════════════════════════════════════
+
 # Validate config file exists and is readable
 validate_config() {
     local config_file="$1"
@@ -607,33 +749,12 @@ generate_standard_server_name() {
     local endpoint=$(grep -m1 "^Endpoint" "$config_file" | cut -d= -f2 | tr -d ' ')
     local server_ip=$(echo "$endpoint" | cut -d: -f1)
 
-    # Detect provider
+    # Detect provider using shared function
     local provider=""
-    local dns=$(grep -m1 "^DNS" "$config_file" | cut -d= -f2 | tr -d ' ')
-
-    # Provider detection (same logic as lazyvpn-get-server-info)
-    case "$dns" in
-        10.2.0.1) provider="Proton" ;;
-        10.64.0.1|193.138.218.74) provider="Mullvad" ;;
-        172.16.0.1) provider="IVPN" ;;
-        10.0.0.241|10.0.0.242) provider="PIA" ;;
-    esac
-
-    # Also check endpoint and comments
-    if [[ -z "$provider" ]]; then
-        if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]] || grep -qi "protonvpn" "$config_file"; then
-            provider="Proton"
-        elif [[ "$endpoint" =~ mullvad\.net ]] || grep -qi "mullvad" "$config_file"; then
-            provider="Mullvad"
-        elif [[ "$endpoint" =~ ivpn\.net ]] || grep -qi "ivpn" "$config_file"; then
-            provider="IVPN"
-        elif [[ "$endpoint" =~ privateinternetaccess\.com ]]; then
-            provider="PIA"
-        elif [[ "$endpoint" =~ nordvpn\.com ]] || grep -qi "nordvpn" "$config_file"; then
-            provider="Nord"
-        elif [[ "$endpoint" =~ surfshark\.com ]] || grep -qi "surfshark" "$config_file"; then
-            provider="Surf"
-        fi
+    local provider_id
+    provider_id=$(detect_provider "$config_file")
+    if [[ -n "$provider_id" ]]; then
+        provider="${PROVIDER_PREFIX[$provider_id]}"
     fi
 
     # Try to parse location from original filename

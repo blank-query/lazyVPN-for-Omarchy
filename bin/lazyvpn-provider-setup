@@ -15,78 +15,11 @@ DOWNLOADS_DIR="$HOME/Downloads"
 # Ensure providers directory exists
 mkdir -p "$PROVIDERS_DIR"
 
-# Supported providers (must have gluetun support)
-declare -A SUPPORTED_PROVIDERS=(
-  [protonvpn]="ProtonVPN"
-  [mullvad]="Mullvad"
-  [ivpn]="IVPN"
-  [pia]="Private Internet Access"
-  [nordvpn]="NordVPN"
-  [surfshark]="Surfshark"
-  [windscribe]="Windscribe"
-)
-
 # Helper function to parse config values
 parse_wg_value() {
   local key="$1"
   local file="$2"
   grep -i "^${key}" "$file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r'
-}
-
-# Detect provider from config file
-detect_provider() {
-  local config_file="$1"
-  local provider=""
-
-  # Method 1: DNS server detection
-  local dns
-  dns=$(parse_wg_value "DNS" "$config_file")
-
-  case "$dns" in
-    10.2.0.1) provider="protonvpn" ;;
-    10.64.0.1|193.138.218.74) provider="mullvad" ;;
-    172.16.0.1) provider="ivpn" ;;
-    10.0.0.241|10.0.0.242) provider="pia" ;;
-  esac
-
-  # Method 2: Endpoint domain detection
-  if [[ -z "$provider" ]]; then
-    local endpoint
-    endpoint=$(parse_wg_value "Endpoint" "$config_file")
-
-    if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]]; then
-      provider="protonvpn"
-    elif [[ "$endpoint" =~ mullvad\.net ]]; then
-      provider="mullvad"
-    elif [[ "$endpoint" =~ ivpn\.net ]]; then
-      provider="ivpn"
-    elif [[ "$endpoint" =~ privateinternetaccess\.com ]]; then
-      provider="pia"
-    elif [[ "$endpoint" =~ nordvpn\.com ]]; then
-      provider="nordvpn"
-    elif [[ "$endpoint" =~ surfshark\.com ]]; then
-      provider="surfshark"
-    elif [[ "$endpoint" =~ windscribe\.com ]]; then
-      provider="windscribe"
-    fi
-  fi
-
-  # Method 3: Config file comments
-  if [[ -z "$provider" ]]; then
-    if grep -qi "protonvpn" "$config_file"; then
-      provider="protonvpn"
-    elif grep -qi "mullvad" "$config_file"; then
-      provider="mullvad"
-    elif grep -qi "ivpn" "$config_file"; then
-      provider="ivpn"
-    elif grep -qi "nordvpn" "$config_file"; then
-      provider="nordvpn"
-    elif grep -qi "surfshark" "$config_file"; then
-      provider="surfshark"
-    fi
-  fi
-
-  echo "$provider"
 }
 
 # Validate WireGuard private key format (base64, 44 chars with =)
@@ -127,14 +60,14 @@ save_provider_credentials() {
   # Create credentials file
   cat > "$creds_file" << EOF
 # LazyVPN Provider Credentials
-# Provider: ${SUPPORTED_PROVIDERS[$provider]}
+# Provider: ${PROVIDER_DISPLAY[$provider]}
 # Generated: $(date -Iseconds)
 #
 # WARNING: This file contains your VPN private key.
 # Keep it secure and do not share it.
 
 PROVIDER=$provider
-PROVIDER_NAME=${SUPPORTED_PROVIDERS[$provider]}
+PROVIDER_NAME=${PROVIDER_DISPLAY[$provider]}
 PRIVATE_KEY=$private_key
 ADDRESS=$address
 EOF
@@ -155,12 +88,12 @@ echo "config file. Your private key will be extracted and used to"
 echo "connect to any server from this provider."
 echo ""
 echo "Supported providers:"
-for key in "${!SUPPORTED_PROVIDERS[@]}"; do
+for key in "${!PROVIDER_DISPLAY[@]}"; do
   # Check if already configured
   if [[ -f "$PROVIDERS_DIR/${key}.conf" ]]; then
-    echo "  • ${SUPPORTED_PROVIDERS[$key]} (configured)"
+    echo "  • ${PROVIDER_DISPLAY[$key]} (configured)"
   else
-    echo "  • ${SUPPORTED_PROVIDERS[$key]}"
+    echo "  • ${PROVIDER_DISPLAY[$key]}"
   fi
 done
 echo ""
@@ -254,33 +187,33 @@ if [[ -z "$PROVIDER" ]]; then
   echo "Please select your VPN provider:"
 
   providers_list=""
-  for key in "${!SUPPORTED_PROVIDERS[@]}"; do
-    providers_list+="${SUPPORTED_PROVIDERS[$key]}\n"
+  for key in "${!PROVIDER_DISPLAY[@]}"; do
+    providers_list+="${PROVIDER_DISPLAY[$key]}\n"
   done
 
   if command -v fzf &>/dev/null; then
     selected=$(echo -e "$providers_list" | fzf --prompt="Provider: " --height=40%)
   else
-    select p in "${SUPPORTED_PROVIDERS[@]}"; do
+    select p in "${PROVIDER_DISPLAY[@]}"; do
       selected="$p"
       break
     done
   fi
 
   # Map display name back to key
-  for key in "${!SUPPORTED_PROVIDERS[@]}"; do
-    if [[ "${SUPPORTED_PROVIDERS[$key]}" == "$selected" ]]; then
+  for key in "${!PROVIDER_DISPLAY[@]}"; do
+    if [[ "${PROVIDER_DISPLAY[$key]}" == "$selected" ]]; then
       PROVIDER="$key"
       break
     fi
   done
 fi
 
-if [[ -z "$PROVIDER" ]] || [[ -z "${SUPPORTED_PROVIDERS[$PROVIDER]}" ]]; then
+if [[ -z "$PROVIDER" ]] || [[ -z "${PROVIDER_DISPLAY[$PROVIDER]}" ]]; then
   error "Invalid or unsupported provider"
 fi
 
-PROVIDER_NAME="${SUPPORTED_PROVIDERS[$PROVIDER]}"
+PROVIDER_NAME="${PROVIDER_DISPLAY[$PROVIDER]}"
 
 echo "  Provider: $PROVIDER_NAME"
 echo "  Private Key: ${PRIVATE_KEY:0:8}...${PRIVATE_KEY: -4} (verified)"
