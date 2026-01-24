@@ -426,33 +426,6 @@ country_flag() {
     echo "$flag"
 }
 
-# Record performance data
-record_performance() {
-    local server="$1"
-    local type="$2"        # "speed" or "latency"
-    local value="$3"       # numeric value
-    local status="$4"      # "ok" or "failed"
-    local config_dir="${5:-$HOME/.config/lazyvpn}"
-
-    local perf_dir="$config_dir/performance"
-    mkdir -p "$perf_dir"
-
-    local perf_file="$perf_dir/${server}.log"
-    local timestamp=$(date +%s)
-
-    # Append performance data: timestamp|type|value|status
-    echo "$timestamp|$type|$value|$status" >> "$perf_file"
-
-    # Keep log size reasonable (max 100 entries per server)
-    if [[ -f "$perf_file" ]]; then
-        line_count=$(wc -l < "$perf_file")
-        if [[ $line_count -gt 100 ]]; then
-            tail -n 100 "$perf_file" > "$perf_file.tmp"
-            mv "$perf_file.tmp" "$perf_file"
-        fi
-    fi
-}
-
 # Expand country codes to full names
 expand_country_name() {
     local code="$1"

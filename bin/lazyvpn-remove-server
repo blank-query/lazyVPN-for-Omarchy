@@ -10,7 +10,6 @@ source "$SCRIPT_DIR/lazyvpn-common" || exit 1
 CONFIG_DIR="$HOME/.config/lazyvpn"
 CONFIG_FILE="$CONFIG_DIR/config"
 WG_DIR="$CONFIG_DIR/wireguard"
-PERF_DIR="$CONFIG_DIR/performance"
 
 # Check if wireguard directory exists
 if [[ ! -d "$WG_DIR" ]]; then
@@ -221,11 +220,6 @@ while IFS='|' read -r display_name file_path validation_status is_connected; do
       : # Successfully shredded
     else
       rm -f "$file_path"  # Fallback to regular deletion
-    fi
-
-    # Securely delete performance history (contains usage metadata)
-    if [[ -f "$PERF_DIR/${filename}.log" ]]; then
-      shred -u "$PERF_DIR/${filename}.log" 2>/dev/null || rm -f "$PERF_DIR/${filename}.log"
     fi
 
     # Check and update config file if this was the last connected server
