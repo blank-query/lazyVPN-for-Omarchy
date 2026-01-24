@@ -590,6 +590,7 @@ LIST_EOF
     --prompt="> "
     --delimiter='|'
     --with-nth=1
+    --no-sort
     --preview="$preview_script {} '$CACHE_DIR'"
     --preview-window=right:35%:wrap
     --height=80%

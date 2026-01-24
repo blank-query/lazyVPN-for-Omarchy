@@ -147,6 +147,7 @@ SELECTED=$(cat "$TEMP_LIST" | fzf \
   --prompt="My Servers: " \
   --delimiter='|' \
   --with-nth=1 \
+  --no-sort \
   --preview="$PREVIEW_SCRIPT {} '$SCRIPT_DIR' '$CACHE_DIR'" \
   --preview-window=right:40%:wrap \
   --height=80%)

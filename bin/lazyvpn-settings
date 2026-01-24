@@ -275,6 +275,7 @@ main() {
     selected=$(generate_settings | fzf \
       --height=100% \
       --no-info \
+      --no-sort \
       --prompt="Settings: " \
       --header="LazyVPN Settings  │  Enter: Select  │  Esc: Exit" \
       --header-first \
