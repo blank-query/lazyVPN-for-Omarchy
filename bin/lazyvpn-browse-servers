@@ -571,7 +571,7 @@ if [[ "$current" == "ALL" ]]; then
       cache="$CACHE_DIR/${p}_servers.json"
       [[ -f "$cache" ]] && output_servers "$cache" "$p"
     done
-  } | sort -t'|' -k1,1
+  } | sort -t'|' -k2,2
 else
   cache="$CACHE_DIR/${current}_servers.json"
   [[ -f "$cache" ]] && output_servers "$cache" "$current"

@@ -97,7 +97,9 @@ detect_provider() {
         10.2.0.1) provider="protonvpn" ;;
         10.64.0.1|193.138.218.74) provider="mullvad" ;;
         172.16.0.1) provider="ivpn" ;;
-        10.0.0.241|10.0.0.242) provider="pia" ;;
+        10.0.0.241|10.0.0.242|10.0.0.243) provider="pia" ;;
+        103.86.96.100) provider="nordvpn" ;;
+        10.255.255.1) provider="windscribe" ;;
     esac
 
     # Method 2: Endpoint domain detection
