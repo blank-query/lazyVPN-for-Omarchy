@@ -63,7 +63,7 @@ cd lazyVPN-for-Omarchy
 ![Settings Menu](images/06-settings.png)
 
 ### Waybar Integration
-![Waybar Tooltip](waybar-tooltip.png)
+![Waybar Tooltip](images/waybar-tooltip.png)
 
 </details>
 
