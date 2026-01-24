@@ -60,6 +60,7 @@ if is_connected "$CONN_NAME"; then
   fi
 fi
 
+debug_log connection "Connecting to server: $SERVER_NAME (config: $VPN_CONFIG_FILE)"
 info "Switching to server: $SERVER_DISPLAY"
 
 # Show current public IP before connecting
@@ -159,6 +160,7 @@ EOF
 # Restart systemd-networkd to apply changes
 info "Restarting systemd-networkd..."
 sudo systemctl restart systemd-networkd
+debug_log connection "systemd-networkd files created for $CONN_NAME (endpoint: $ENDPOINT, DNS: $DNS)"
 
 # Wait for systemd-networkd to fully initialize and read config files
 sleep 1
@@ -189,6 +191,7 @@ fi
 
 # Add default route through VPN interface with lower metric (preferred over existing default)
 sudo ip route add default dev "$CONN_NAME" metric 100 2>/dev/null || warn "Route configuration may need adjustment"
+debug_log connection "Routes configured: endpoint=$VPN_ENDPOINT_IP via $DEFAULT_GW dev $DEFAULT_DEV, default via $CONN_NAME metric 100"
 
 echo ""
 info "Verifying connection..."
@@ -263,6 +266,7 @@ fi
 
 # Handle connection failure
 if [[ "$CONNECTION_FAILED" == "true" ]]; then
+  debug_log connection "Connection verification FAILED: $FAILURE_REASON"
   echo ""
   echo "Error: Connection failed - $FAILURE_REASON"
   cleanup_failed_connection
@@ -320,6 +324,7 @@ if command -v resolvectl &>/dev/null; then
 fi
 
 # All verification passed - update config and show success
+debug_log connection "Connection verified successfully: $SERVER_NAME (IP: $PUBLIC_IP)"
 echo ""
 info "Successfully connected to $SERVER_DISPLAY"
 

@@ -36,6 +36,7 @@ else
 fi
 echo ""
 
+debug_log connection "Disconnecting interface: $CONN_NAME"
 info "Disconnecting from VPN..."
 
 # Bring down the interface
@@ -74,6 +75,7 @@ load_config "$CONFIG_FILE"
 
 # Check if killswitch is active (by checking for the DROP rule)
 if [[ "${KILLSWITCH:-false}" == "true" ]] && sudo iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
+  debug_log connection "Killswitch active on disconnect, mode=${KILLSWITCH_AUTO_DISABLE:-true}"
   case "${KILLSWITCH_AUTO_DISABLE:-true}" in
     true)
       # AUTO: automatically disable killswitch
@@ -183,5 +185,6 @@ if [[ "$DISCONNECT_FAILED" == "true" ]]; then
 fi
 
 # All verification passed
+debug_log connection "Disconnection verified successfully"
 echo ""
 info "Successfully disconnected"

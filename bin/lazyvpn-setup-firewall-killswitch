@@ -15,32 +15,43 @@ if [[ $EUID -ne 0 ]]; then
   exec sudo "$0" "$@"
 fi
 
+# Load config for debug logging settings
+REAL_HOME="$HOME"
+[[ -n "$SUDO_USER" ]] && REAL_HOME=$(eval echo ~"$SUDO_USER")
+load_config "$REAL_HOME/.config/lazyvpn/config"
+
+debug_log firewall "Setting up firewall killswitch chains"
 info "Setting up firewall killswitch..."
 
 # Create custom chains for LazyVPN if they don't exist
 if ! iptables -L LAZYVPN_OUT -n &>/dev/null; then
   iptables -N LAZYVPN_OUT
+  debug_log firewall "Created LAZYVPN_OUT chain (IPv4)"
   info "Created LAZYVPN_OUT chain"
 fi
 
 if ! ip6tables -L LAZYVPN_OUT -n &>/dev/null; then
   ip6tables -N LAZYVPN_OUT
+  debug_log firewall "Created LAZYVPN_OUT chain (IPv6)"
   info "Created LAZYVPN_OUT chain (IPv6)"
 fi
 
 # Flush existing rules in our chains
 iptables -F LAZYVPN_OUT
 ip6tables -F LAZYVPN_OUT
+debug_log firewall "Flushed existing LAZYVPN_OUT rules"
 info "Flushed existing rules from LAZYVPN chains"
 
 # Insert jump to our chain at the beginning of OUTPUT if not already present
 if ! iptables -C OUTPUT -j LAZYVPN_OUT &>/dev/null; then
   iptables -I OUTPUT 1 -j LAZYVPN_OUT
+  debug_log firewall "Inserted jump to LAZYVPN_OUT in OUTPUT chain (IPv4)"
   info "Added jump to LAZYVPN_OUT in OUTPUT chain"
 fi
 
 if ! ip6tables -C OUTPUT -j LAZYVPN_OUT &>/dev/null; then
   ip6tables -I OUTPUT 1 -j LAZYVPN_OUT
+  debug_log firewall "Inserted jump to LAZYVPN_OUT in OUTPUT chain (IPv6)"
   info "Added jump to LAZYVPN_OUT in OUTPUT chain (IPv6)"
 fi
 
@@ -48,6 +59,7 @@ fi
 iptables -A LAZYVPN_OUT -j RETURN
 ip6tables -A LAZYVPN_OUT -j RETURN
 
+debug_log firewall "Killswitch chains created with default RETURN (inactive)"
 info "✓ Firewall killswitch chains created successfully"
 
 # Save iptables rules to make them persistent across reboots

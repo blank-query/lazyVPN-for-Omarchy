@@ -92,6 +92,7 @@ detect_provider() {
     # Method 1: DNS server detection (most reliable)
     local dns
     dns=$(grep -i "^DNS" "$config_file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r')
+    debug_log provider "detect_provider: DNS value='$dns' from $config_file"
 
     case "$dns" in
         10.2.0.1) provider="protonvpn" ;;
@@ -102,10 +103,15 @@ detect_provider() {
         10.255.255.1) provider="windscribe" ;;
     esac
 
+    if [[ -n "$provider" ]]; then
+        debug_log provider "detect_provider: matched via DNS → $provider"
+    fi
+
     # Method 2: Endpoint domain detection
     if [[ -z "$provider" ]]; then
         local endpoint
         endpoint=$(grep -i "^Endpoint" "$config_file" | head -n1 | sed 's/^[^=]*=\s*//' | sed 's/\s*#.*//' | tr -d '\r')
+        debug_log provider "detect_provider: Endpoint value='$endpoint'"
 
         if [[ "$endpoint" =~ protonvpn\.com|protonvpn\.net ]]; then
             provider="protonvpn"
@@ -122,10 +128,15 @@ detect_provider() {
         elif [[ "$endpoint" =~ windscribe\.com ]]; then
             provider="windscribe"
         fi
+
+        if [[ -n "$provider" ]]; then
+            debug_log provider "detect_provider: matched via endpoint → $provider"
+        fi
     fi
 
     # Method 3: Config file comments
     if [[ -z "$provider" ]]; then
+        debug_log provider "detect_provider: falling back to comment detection"
         if grep -qi "protonvpn" "$config_file"; then
             provider="protonvpn"
         elif grep -qi "mullvad" "$config_file"; then
@@ -136,6 +147,12 @@ detect_provider() {
             provider="nordvpn"
         elif grep -qi "surfshark" "$config_file"; then
             provider="surfshark"
+        fi
+
+        if [[ -n "$provider" ]]; then
+            debug_log provider "detect_provider: matched via comments → $provider"
+        else
+            debug_log provider "detect_provider: no provider detected"
         fi
     fi
 
@@ -394,6 +411,60 @@ load_config() {
     LAST_CONNECTED_SERVER="${LAST_CONNECTED_SERVER:-}"
     AUTO_RECOVER="${AUTO_RECOVER:-true}"
     AUTO_FAILOVER="${AUTO_FAILOVER:-false}"
+    LOG_CONNECTION="${LOG_CONNECTION:-false}"
+    LOG_AUTORECOVER="${LOG_AUTORECOVER:-false}"
+    LOG_FIREWALL="${LOG_FIREWALL:-false}"
+    LOG_PROVIDER="${LOG_PROVIDER:-false}"
+    LOG_AUTOSTART="${LOG_AUTOSTART:-false}"
+    LOG_MODE="${LOG_MODE:-safe}"
+}
+
+# Sanitize log message based on LOG_MODE
+sanitize_log() {
+    local msg="$1"
+    if [[ "${LOG_MODE:-safe}" == "safe" ]]; then
+        # Redact WireGuard keys (44-char base64 ending in =)
+        msg=$(echo "$msg" | sed -E 's/[A-Za-z0-9+/]{43}=/[redacted-key]/g')
+        # Redact IPv4 addresses
+        msg=$(echo "$msg" | sed -E 's/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[redacted-ip]/g')
+    fi
+    echo "$msg"
+}
+
+# Write a debug log entry if the given category is enabled
+debug_log() {
+    local category="$1"
+    shift
+    local real_home="$HOME"
+    if [[ -n "$SUDO_USER" ]]; then
+        real_home=$(eval echo ~"$SUDO_USER")
+    fi
+    local config_dir="$real_home/.config/lazyvpn"
+    local log_file="$config_dir/debug.log"
+
+    # Check if this category is enabled
+    case "$category" in
+        connection)  [[ "${LOG_CONNECTION:-false}" != "true" ]] && return ;;
+        autorecover) [[ "${LOG_AUTORECOVER:-false}" != "true" ]] && return ;;
+        firewall)    [[ "${LOG_FIREWALL:-false}" != "true" ]] && return ;;
+        provider)    [[ "${LOG_PROVIDER:-false}" != "true" ]] && return ;;
+        autostart)   [[ "${LOG_AUTOSTART:-false}" != "true" ]] && return ;;
+        *) return ;;
+    esac
+
+    local msg
+    msg=$(sanitize_log "$*")
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$category] $msg" >> "$log_file"
+
+    # Rotate if over 1000 lines
+    if [[ -f "$log_file" ]]; then
+        local lc
+        lc=$(wc -l < "$log_file")
+        if [[ $lc -gt 1000 ]]; then
+            tail -n 500 "$log_file" > "$log_file.tmp"
+            mv "$log_file.tmp" "$log_file"
+        fi
+    fi
 }
 
 # Convert country code to flag emoji

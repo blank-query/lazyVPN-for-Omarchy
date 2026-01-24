@@ -392,7 +392,7 @@ else
   # Securely delete LazyVPN's own config files (not server configs)
   echo "  - Securely deleting LazyVPN config and cache files..."
   shredded_count=0
-  for config_file in "$CONFIG_DIR"/config "$CONFIG_DIR"/.server-list-cache "$CONFIG_DIR"/favorites "$CONFIG_DIR"/.auto-recover.pid "$CONFIG_DIR"/auto-recover.log "$CONFIG_DIR"/state; do
+  for config_file in "$CONFIG_DIR"/config "$CONFIG_DIR"/.server-list-cache "$CONFIG_DIR"/favorites "$CONFIG_DIR"/.auto-recover.pid "$CONFIG_DIR"/auto-recover.log "$CONFIG_DIR"/debug.log "$CONFIG_DIR"/state; do
     if [[ -f "$config_file" ]]; then
       if shred -u "$config_file" 2>/dev/null; then
         echo "    ✓ Securely deleted: $(basename "$config_file")"

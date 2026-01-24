@@ -11,7 +11,6 @@ source "$SCRIPT_DIR/lazyvpn-common" || exit 1
 CONFIG_DIR="$HOME/.config/lazyvpn"
 CONFIG_FILE="$CONFIG_DIR/config"
 PID_FILE="$CONFIG_DIR/.auto-recover.pid"
-LOG_FILE="$CONFIG_DIR/auto-recover.log"
 
 # Check if already running
 if [[ -f "$PID_FILE" ]]; then
@@ -35,21 +34,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Log function
-log_message() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
-}
+# Load config for debug_log settings
+load_config "$CONFIG_FILE"
 
-log_message "Auto-recover daemon started (PID: $$)"
-
-# Keep log file size reasonable (max 1000 lines)
-if [[ -f "$LOG_FILE" ]]; then
-  line_count=$(wc -l < "$LOG_FILE")
-  if [[ $line_count -gt 1000 ]]; then
-    tail -n 500 "$LOG_FILE" > "$LOG_FILE.tmp"
-    mv "$LOG_FILE.tmp" "$LOG_FILE"
-  fi
-fi
+debug_log autorecover "Auto-recover daemon started (PID: $$)"
 
 # Main monitoring loop
 CONSECUTIVE_FAILURES=0
@@ -62,7 +50,7 @@ while true; do
 
   # Check if auto-recover is enabled
   if [[ "${AUTO_RECOVER:-false}" != "true" ]]; then
-    log_message "Auto-recover disabled in config. Stopping."
+    debug_log autorecover "Auto-recover disabled in config. Stopping."
     exit 0
   fi
 
@@ -80,7 +68,7 @@ while true; do
   LAST_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" | cut -d= -f2)
 
   if [[ -z "$LAST_SERVER" ]]; then
-    log_message "No last connected server found"
+    debug_log autorecover "No last connected server found"
     sleep "$CHECK_INTERVAL"
     continue
   fi
@@ -111,7 +99,7 @@ while true; do
     fi
 
     if [[ -z "$ENDPOINT" ]]; then
-      log_message "Could not find endpoint for dynamic server $SERVER_NAME"
+      debug_log autorecover "Could not find endpoint for dynamic server $SERVER_NAME"
       sleep "$CHECK_INTERVAL"
       continue
     fi
@@ -124,7 +112,7 @@ while true; do
     VPN_CONFIG="$WG_DIR/${LAST_SERVER}.conf"
 
     if [[ ! -f "$VPN_CONFIG" ]]; then
-      log_message "Config not found for $LAST_SERVER"
+      debug_log autorecover "Config not found for $LAST_SERVER"
       sleep "$CHECK_INTERVAL"
       continue
     fi
@@ -134,7 +122,7 @@ while true; do
   fi
 
   if [[ -z "$ENDPOINT" ]]; then
-    log_message "Could not determine endpoint for $LAST_SERVER"
+    debug_log autorecover "Could not determine endpoint for $LAST_SERVER"
     sleep "$CHECK_INTERVAL"
     continue
   fi
@@ -143,62 +131,62 @@ while true; do
   if ping -c 2 -W 3 -I "$CONN_NAME" "$ENDPOINT" >/dev/null 2>&1; then
     # Connection healthy
     if [[ $CONSECUTIVE_FAILURES -gt 0 ]]; then
-      log_message "Connection restored to $LAST_SERVER"
+      debug_log autorecover "Connection restored to $LAST_SERVER"
       notify "VPN connection restored to $PRETTY_SERVER"
     fi
     CONSECUTIVE_FAILURES=0
   else
     # Connection unhealthy
     ((CONSECUTIVE_FAILURES++))
-    log_message "Health check failed for $LAST_SERVER (attempt $CONSECUTIVE_FAILURES/$MAX_FAILURES)"
+    debug_log autorecover "Health check failed for $LAST_SERVER (attempt $CONSECUTIVE_FAILURES/$MAX_FAILURES)"
 
     if [[ $CONSECUTIVE_FAILURES -ge $MAX_FAILURES ]]; then
-      log_message "Connection to $LAST_SERVER failed. Attempting reconnect..."
+      debug_log autorecover "Connection to $LAST_SERVER failed. Attempting reconnect..."
       notify "VPN connection lost!\nAttempting to reconnect to $PRETTY_SERVER..."
 
       # Attempt reconnect (handle both dynamic and traditional servers)
       RECONNECT_SUCCESS=false
       if [[ "$IS_DYNAMIC" == "true" ]]; then
-        if "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER_NAME" >> "$LOG_FILE" 2>&1; then
+        if "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER_NAME" >/dev/null 2>&1; then
           RECONNECT_SUCCESS=true
         fi
       else
-        if "$SCRIPT_DIR/lazyvpn-connect" "$LAST_SERVER" >> "$LOG_FILE" 2>&1; then
+        if "$SCRIPT_DIR/lazyvpn-connect" "$LAST_SERVER" >/dev/null 2>&1; then
           RECONNECT_SUCCESS=true
         fi
       fi
 
       if [[ "$RECONNECT_SUCCESS" == "true" ]]; then
-        log_message "Successfully reconnected to $LAST_SERVER"
+        debug_log autorecover "Successfully reconnected to $LAST_SERVER"
         notify "VPN reconnected successfully to $PRETTY_SERVER"
         CONSECUTIVE_FAILURES=0
       else
-        log_message "Failed to reconnect to $LAST_SERVER"
+        debug_log autorecover "Failed to reconnect to $LAST_SERVER"
         notify "VPN connection failed!\nAttempting to reconnect to $PRETTY_SERVER..."
 
         # If auto-reconnect fails, check if user wants to try another server
         if [[ "${AUTO_FAILOVER:-false}" == "true" ]]; then
-          log_message "Attempting failover to alternate server..."
+          debug_log autorecover "Attempting failover to alternate server..."
 
           # Check if killswitch would block quickest (same logic as autoconnect)
           if [[ "$KILLSWITCH" == "true" ]] && ! is_connected "$CONN_NAME"; then
             # Use random instead of quickest when killswitch blocks
-            log_message "Killswitch active - using random server selection"
-            if "$SCRIPT_DIR/lazyvpn-random" >> "$LOG_FILE" 2>&1; then
-              log_message "Failover successful (used random due to killswitch)"
+            debug_log autorecover "Killswitch active - using random server selection"
+            if "$SCRIPT_DIR/lazyvpn-random" >/dev/null 2>&1; then
+              debug_log autorecover "Failover successful (used random due to killswitch)"
               notify "VPN failed over to random server"
               CONSECUTIVE_FAILURES=0
             else
-              log_message "Failover failed"
+              debug_log autorecover "Failover failed"
             fi
           else
             # Killswitch not blocking, can use quickest
-            if "$SCRIPT_DIR/lazyvpn-quickest" >> "$LOG_FILE" 2>&1; then
-              log_message "Failover successful"
+            if "$SCRIPT_DIR/lazyvpn-quickest" >/dev/null 2>&1; then
+              debug_log autorecover "Failover successful"
               notify "VPN failed over to alternate server"
               CONSECUTIVE_FAILURES=0
             else
-              log_message "Failover failed"
+              debug_log autorecover "Failover failed"
             fi
           fi
         fi

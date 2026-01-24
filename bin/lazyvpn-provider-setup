@@ -140,8 +140,14 @@ echo ""
 echo "Analyzing config file..."
 echo ""
 
+# Load config for debug logging settings
+load_config "$HOME/.config/lazyvpn/config"
+
+debug_log provider "Provider setup: analyzing config file $CONFIG_FILE"
+
 # Validate config has required sections
 if ! grep -q "\[Interface\]" "$CONFIG_FILE" || ! grep -q "\[Peer\]" "$CONFIG_FILE"; then
+  debug_log provider "Rejected: missing [Interface] or [Peer] section"
   error "Invalid WireGuard config (missing [Interface] or [Peer] section)"
 fi
 
@@ -149,11 +155,13 @@ fi
 PRIVATE_KEY=$(parse_wg_value "PrivateKey" "$CONFIG_FILE")
 
 if [[ -z "$PRIVATE_KEY" ]]; then
+  debug_log provider "Rejected: no PrivateKey found in config"
   error "Could not find PrivateKey in config file"
 fi
 
 # Validate private key
 if ! validate_private_key "$PRIVATE_KEY"; then
+  debug_log provider "Rejected: invalid private key format (length=${#PRIVATE_KEY})"
   echo "Error: Invalid or sanitized private key detected."
   echo ""
   echo "The private key appears to be:"
@@ -179,9 +187,11 @@ if [[ -z "$ADDRESS" ]]; then
 fi
 
 # Detect provider
+debug_log provider "Running provider detection on $CONFIG_FILE"
 PROVIDER=$(detect_provider "$CONFIG_FILE")
 
 if [[ -z "$PROVIDER" ]]; then
+  debug_log provider "Auto-detection failed, prompting user for provider selection"
   echo "Could not auto-detect provider."
   echo ""
   echo "Please select your VPN provider:"
@@ -214,6 +224,7 @@ if [[ -z "$PROVIDER" ]] || [[ -z "${PROVIDER_DISPLAY[$PROVIDER]}" ]]; then
 fi
 
 PROVIDER_NAME="${PROVIDER_DISPLAY[$PROVIDER]}"
+debug_log provider "Provider identified: $PROVIDER ($PROVIDER_NAME)"
 
 echo "  Provider: $PROVIDER_NAME"
 echo "  Private Key: ${PRIVATE_KEY:0:8}...${PRIVATE_KEY: -4} (verified)"
@@ -233,7 +244,9 @@ fi
 
 # Save credentials
 echo "Saving credentials..."
+debug_log provider "Saving credentials for $PROVIDER"
 if save_provider_credentials "$PROVIDER" "$PRIVATE_KEY" "$ADDRESS"; then
+  debug_log provider "Credentials saved successfully for $PROVIDER"
   echo ""
   echo "════════════════════════════════════════════════════════════"
   echo "  Setup Complete"

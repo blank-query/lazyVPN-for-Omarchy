@@ -23,10 +23,12 @@ fi
 # Load config
 CONFIG_FILE="$HOME/.config/lazyvpn/config"
 [[ -n "$SUDO_USER" ]] && CONFIG_FILE="/home/$SUDO_USER/.config/lazyvpn/config"
+load_config "$CONFIG_FILE"
 
 # Check if killswitch is currently enabled (by checking for the DROP rule)
 if iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
   # Killswitch is enabled, so disable it
+  debug_log firewall "Disabling killswitch (DROP rule found)"
   info "Disabling killswitch..."
   iptables -F LAZYVPN_OUT
   iptables -A LAZYVPN_OUT -j RETURN
@@ -51,6 +53,7 @@ if iptables -C LAZYVPN_OUT -j DROP &>/dev/null; then
   fi
 else
   # Killswitch is disabled, so enable it
+  debug_log firewall "Enabling killswitch"
   info "Enabling killswitch..."
 
   # Update config first
@@ -65,6 +68,7 @@ else
   CONN_NAME="${CONNECTION_NAME:-wg0}"
   if ip link show "$CONN_NAME" &>/dev/null; then
     # VPN is connected - use update-killswitch to build proper rules
+    debug_log firewall "VPN connected ($CONN_NAME) - building proper killswitch rules"
     info "VPN is connected - building proper killswitch rules for active connection..."
     if "$SCRIPT_DIR/lazyvpn-update-killswitch"; then
       info "✓ Killswitch enabled with rules for active VPN connection"
@@ -80,6 +84,7 @@ else
     fi
   else
     # No VPN connected - use simple blocking mode
+    debug_log firewall "No VPN connected - using simple DROP mode"
     info "No active VPN connection - using simple blocking mode"
     iptables -F LAZYVPN_OUT
     iptables -A LAZYVPN_OUT -o lo -j RETURN

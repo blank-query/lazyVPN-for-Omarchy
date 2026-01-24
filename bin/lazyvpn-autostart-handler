@@ -9,6 +9,11 @@ source "$SCRIPT_DIR/lazyvpn-common" || exit 1
 
 CONFIG_FILE="$HOME/.config/lazyvpn/config"
 
+# Load config early for debug logging settings
+load_config "$CONFIG_FILE"
+
+debug_log autostart "Autostart handler invoked, waiting for network"
+
 # Wait for network to be ready (with timeout)
 info "Waiting for network connectivity..."
 NETWORK_READY=false
@@ -92,8 +97,11 @@ fi
 
 # Only proceed if autoconnect is enabled
 if [[ "$AUTOCONNECT" != "true" ]]; then
+  debug_log autostart "Autoconnect disabled, exiting"
   exit 0
 fi
+
+debug_log autostart "Autoconnect starting: mode=$AUTOCONNECT_MODE"
 
 # Notify user that autoconnect is starting
 notify "LazyVPN: Autoconnect starting..."
@@ -103,19 +111,23 @@ case "$AUTOCONNECT_MODE" in
   quickest)
     # Check if killswitch is blocking (prevents quickest from working)
     if [[ "$KILLSWITCH" == "true" ]] && ! is_connected "${CONNECTION_NAME:-wg0}"; then
+      debug_log autostart "Killswitch blocking latency test, falling back to random"
       warn "Killswitch is active - cannot test latency to find quickest server"
       warn "Falling back to random server selection"
       notify "LazyVPN: Autoconnecting to random server (killswitch prevents latency test)"
       "$SCRIPT_DIR/lazyvpn-random"
     else
+      debug_log autostart "Connecting to quickest (lowest latency) server"
       "$SCRIPT_DIR/lazyvpn-quickest"
     fi
     ;;
   random)
+    debug_log autostart "Connecting to random server"
     "$SCRIPT_DIR/lazyvpn-random"
     ;;
   last_used)
     if [[ -n "$LAST_CONNECTED_SERVER" ]]; then
+      debug_log autostart "Connecting to last used server: $LAST_CONNECTED_SERVER"
       # Handle dynamic server format: "dynamic:provider:server_name"
       if [[ "$LAST_CONNECTED_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
         PROVIDER="${BASH_REMATCH[1]}"
@@ -126,12 +138,14 @@ case "$AUTOCONNECT_MODE" in
       fi
     else
       # Fallback to random if no last used server
+      debug_log autostart "No last used server found, falling back to random"
       warn "No last used server found, connecting to random server"
       "$SCRIPT_DIR/lazyvpn-random"
     fi
     ;;
   specific)
     if [[ -n "$AUTOCONNECT_SERVER" ]]; then
+      debug_log autostart "Connecting to specific server: $AUTOCONNECT_SERVER"
       # Handle dynamic server format: "dynamic:provider:server_name"
       if [[ "$AUTOCONNECT_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
         PROVIDER="${BASH_REMATCH[1]}"
@@ -141,10 +155,12 @@ case "$AUTOCONNECT_MODE" in
         "$SCRIPT_DIR/lazyvpn-connect" "$AUTOCONNECT_SERVER"
       fi
     else
+      debug_log autostart "No specific server configured"
       warn "No specific server configured for autoconnect"
     fi
     ;;
   *)
+    debug_log autostart "Unknown autoconnect mode: $AUTOCONNECT_MODE"
     warn "Unknown autoconnect mode: $AUTOCONNECT_MODE"
     ;;
 esac

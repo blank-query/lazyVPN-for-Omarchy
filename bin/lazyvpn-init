@@ -110,12 +110,8 @@ if grep -q "^HEALTH_MONITORING=" "$CONFIG_FILE" 2>/dev/null; then
     mv "$OLD_PID_FILE" "$NEW_PID_FILE"
   fi
 
-  # Rename old log file if it exists
-  OLD_LOG_FILE="$CONFIG_DIR/health-monitor.log"
-  NEW_LOG_FILE="$CONFIG_DIR/auto-recover.log"
-  if [[ -f "$OLD_LOG_FILE" ]]; then
-    mv "$OLD_LOG_FILE" "$NEW_LOG_FILE"
-  fi
+  # Remove old log files (logging now uses debug.log via debug_log function)
+  rm -f "$CONFIG_DIR/health-monitor.log" "$CONFIG_DIR/auto-recover.log" 2>/dev/null
 fi
 
 # Ensure AUTO_RECOVER exists in config (for upgrades)

@@ -107,6 +107,8 @@ echo ""
 load_config "$USER_CONFIG_FILE"
 CONN_NAME="${CONNECTION_NAME:-wg0}"
 
+debug_log connection "Dynamic connect: provider=$PROVIDER server=$SERVER_NAME endpoint=$SERVER_IP:$PORT"
+
 # Validate CONNECTION_NAME
 if [[ ! "$CONN_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
   error "Invalid CONNECTION_NAME in config"
@@ -187,6 +189,7 @@ EOF
 # Restart systemd-networkd
 info "Restarting systemd-networkd..."
 sudo systemctl restart systemd-networkd
+debug_log connection "systemd-networkd files created for $CONN_NAME (dynamic: $PROVIDER/$SERVER_NAME, DNS: $DNS)"
 
 sleep 1
 
@@ -212,6 +215,7 @@ fi
 
 # Add default route through VPN
 sudo ip route add default dev "$CONN_NAME" metric 100 2>/dev/null || warn "Route configuration may need adjustment"
+debug_log connection "Routes configured for dynamic connection: endpoint=$SERVER_IP, default via $CONN_NAME metric 100"
 
 echo ""
 info "Verifying connection..."
@@ -264,6 +268,7 @@ else
 fi
 
 if [[ "$CONNECTION_FAILED" == "true" ]]; then
+  debug_log connection "Dynamic connection verification FAILED: $FAILURE_REASON"
   echo ""
   echo "Error: Connection failed - $FAILURE_REASON"
   cleanup_failed_connection
@@ -299,6 +304,7 @@ if command -v resolvectl &>/dev/null; then
   fi
 fi
 
+debug_log connection "Dynamic connection verified: $PROVIDER/$SERVER_NAME (IP: $PUBLIC_IP)"
 echo ""
 info "Successfully connected to $DISPLAY_NAME"
 

@@ -139,6 +139,8 @@ else
   fi
 fi
 
+debug_log firewall "Updating killswitch rules: endpoint=$NEW_ENDPOINT DNS=$NEW_DNS interface=$CONN_NAME"
+
 # Flush existing rules
 iptables -F LAZYVPN_OUT
 ip6tables -F LAZYVPN_OUT
@@ -195,6 +197,7 @@ ip6tables -A LAZYVPN_OUT -o "$CONN_NAME" -j RETURN
 iptables -A LAZYVPN_OUT -j DROP
 ip6tables -A LAZYVPN_OUT -j DROP
 
+debug_log firewall "Killswitch rules applied: allow loopback, DNS=$NEW_DNS, endpoint=$NEW_ENDPOINT, LAN=${ALLOW_LOCAL_NETWORK:-false}, interface=$CONN_NAME, DROP all else"
 info "Killswitch rules updated"
 
 # Save iptables rules to make them persistent across reboots

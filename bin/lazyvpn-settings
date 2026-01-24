@@ -87,6 +87,7 @@ generate_settings() {
   printf "%-20s %-26s %-12s %s\n" "tutorial"          "Show Tutorial"            ""                   "Learn how to use LazyVPN"
   printf "%-20s %-26s %-12s %s\n" "uninstall"         "Uninstall LazyVPN"        ""                   "Remove LazyVPN and all settings"
   printf "%-20s %-26s %-12s %s\n" "rename-interface"  "WireGuard Interface"      "[$interface]"       "Change the network interface name"
+  printf "%-20s %-26s %-12s %s\n" "debug"             "Debug Logging"            ""                   "Configure debug log categories"
   echo "─── Advanced ───"
 
   # Testing section - only show when connected
@@ -201,6 +202,9 @@ handle_selection() {
       echo "Opening GitHub in browser..."
       sleep 1
       ;;
+    debug)
+      show_debug_menu
+      ;;
     uninstall)
       echo ""
       read -r -p "Are you sure you want to uninstall LazyVPN? [y/N] " confirm
@@ -260,6 +264,192 @@ EOF
       sleep 1
     fi
   fi
+}
+
+# Check if all logging categories are off and offer to delete log
+check_all_logging_off() {
+  load_config "$CONFIG_FILE"
+  if [[ "${LOG_CONNECTION:-false}" != "true" ]] && \
+     [[ "${LOG_AUTORECOVER:-false}" != "true" ]] && \
+     [[ "${LOG_FIREWALL:-false}" != "true" ]] && \
+     [[ "${LOG_PROVIDER:-false}" != "true" ]] && \
+     [[ "${LOG_AUTOSTART:-false}" != "true" ]]; then
+    local log_file="$CONFIG_DIR/debug.log"
+    if [[ -f "$log_file" ]]; then
+      echo ""
+      read -r -p "All logging disabled. Securely delete debug log? (y/n) " del_response
+      if [[ "${del_response,,}" == "y" ]]; then
+        if shred -u "$log_file" 2>/dev/null; then
+          echo "Debug log securely deleted."
+        else
+          rm -f "$log_file"
+          echo "Debug log deleted."
+        fi
+        sleep 1
+      fi
+    fi
+  fi
+}
+
+# Show debug logging settings sub-page
+show_debug_menu() {
+  while true; do
+    clear
+    load_config "$CONFIG_FILE"
+
+    local mode_display
+    if [[ "${LOG_MODE:-safe}" == "safe" ]]; then
+      mode_display="Safe"
+    else
+      mode_display="Accurate"
+    fi
+
+    local conn_status=$([[ "${LOG_CONNECTION:-false}" == "true" ]] && echo "ON" || echo "OFF")
+    local ar_status=$([[ "${LOG_AUTORECOVER:-false}" == "true" ]] && echo "ON" || echo "OFF")
+    local fw_status=$([[ "${LOG_FIREWALL:-false}" == "true" ]] && echo "ON" || echo "OFF")
+    local prov_status=$([[ "${LOG_PROVIDER:-false}" == "true" ]] && echo "ON" || echo "OFF")
+    local as_status=$([[ "${LOG_AUTOSTART:-false}" == "true" ]] && echo "ON" || echo "OFF")
+
+    local options=""
+    options+=$(printf "%-20s %-26s %-12s %s\n" "clear-log"    "Clear Debug Log"            ""              "Delete all debug logs")
+    options+=$'\n'
+    options+=$(printf "%-20s %-26s %-12s %s\n" "view-log"     "View Debug Log"             ""              "Show recent log entries")
+    options+=$'\n'
+    options+=$(printf "%-20s %-26s %-12s %s\n" "autostart"    "Autostart Logging"          "[$as_status]"  "Log boot-time autoconnect decisions")
+    options+=$'\n'
+    options+=$(printf "%-20s %-26s %-12s %s\n" "provider"     "Provider/Config Logging"    "[$prov_status]" "Log config parsing and provider detection")
+    options+=$'\n'
+    options+=$(printf "%-20s %-26s %-12s %s\n" "firewall"     "Firewall Logging"           "[$fw_status]"  "Log killswitch and iptables changes")
+    options+=$'\n'
+    options+=$(printf "%-20s %-26s %-12s %s\n" "autorecover"  "Auto-recover Logging"       "[$ar_status]"  "Log health checks and reconnection attempts")
+    options+=$'\n'
+    options+=$(printf "%-20s %-26s %-12s %s\n" "connection"   "Connection Logging"         "[$conn_status]" "Log connect/disconnect/handshake events")
+    options+=$'\n'
+    options+=$(printf "%-20s %-26s %-12s %s\n" "log-mode"     "Log Mode"                   "[$mode_display]" "Safe: redacts IPs/keys | Accurate: full details")
+
+    local selected
+    selected=$(echo "$options" | fzf \
+      --height=100% \
+      --no-info \
+      --no-sort \
+      --prompt="Debug: " \
+      --header="Debug Logging  │  Enter: Toggle  │  Esc: Back" \
+      --header-first \
+      --ansi \
+      --bind="enter:accept,esc:abort" \
+      --with-nth=2.. \
+      --color="header:italic")
+
+    if [[ -z "$selected" ]]; then
+      break
+    fi
+
+    local action
+    action=$(echo "$selected" | awk '{print $1}')
+
+    case "$action" in
+      log-mode)
+        if [[ "${LOG_MODE:-safe}" == "safe" ]]; then
+          atomic_config_update "LOG_MODE" "accurate" "$CONFIG_FILE"
+          echo "Log mode set to Accurate (full details logged)"
+        else
+          atomic_config_update "LOG_MODE" "safe" "$CONFIG_FILE"
+          echo "Log mode set to Safe (IPs and keys redacted)"
+        fi
+        sleep 1
+        ;;
+      connection)
+        if [[ "${LOG_CONNECTION:-false}" == "true" ]]; then
+          atomic_config_update "LOG_CONNECTION" "false" "$CONFIG_FILE"
+          echo "Connection logging disabled"
+          sleep 1
+          check_all_logging_off
+        else
+          atomic_config_update "LOG_CONNECTION" "true" "$CONFIG_FILE"
+          echo "Connection logging enabled"
+          sleep 1
+        fi
+        ;;
+      autorecover)
+        if [[ "${LOG_AUTORECOVER:-false}" == "true" ]]; then
+          atomic_config_update "LOG_AUTORECOVER" "false" "$CONFIG_FILE"
+          echo "Auto-recover logging disabled"
+          sleep 1
+          check_all_logging_off
+        else
+          atomic_config_update "LOG_AUTORECOVER" "true" "$CONFIG_FILE"
+          echo "Auto-recover logging enabled"
+          sleep 1
+        fi
+        ;;
+      firewall)
+        if [[ "${LOG_FIREWALL:-false}" == "true" ]]; then
+          atomic_config_update "LOG_FIREWALL" "false" "$CONFIG_FILE"
+          echo "Firewall logging disabled"
+          sleep 1
+          check_all_logging_off
+        else
+          atomic_config_update "LOG_FIREWALL" "true" "$CONFIG_FILE"
+          echo "Firewall logging enabled"
+          sleep 1
+        fi
+        ;;
+      provider)
+        if [[ "${LOG_PROVIDER:-false}" == "true" ]]; then
+          atomic_config_update "LOG_PROVIDER" "false" "$CONFIG_FILE"
+          echo "Provider/Config logging disabled"
+          sleep 1
+          check_all_logging_off
+        else
+          atomic_config_update "LOG_PROVIDER" "true" "$CONFIG_FILE"
+          echo "Provider/Config logging enabled"
+          sleep 1
+        fi
+        ;;
+      autostart)
+        if [[ "${LOG_AUTOSTART:-false}" == "true" ]]; then
+          atomic_config_update "LOG_AUTOSTART" "false" "$CONFIG_FILE"
+          echo "Autostart logging disabled"
+          sleep 1
+          check_all_logging_off
+        else
+          atomic_config_update "LOG_AUTOSTART" "true" "$CONFIG_FILE"
+          echo "Autostart logging enabled"
+          sleep 1
+        fi
+        ;;
+      view-log)
+        local log_file="$CONFIG_DIR/debug.log"
+        clear
+        echo "─── Debug Log (last 50 lines) ───"
+        echo ""
+        if [[ -f "$log_file" ]]; then
+          tail -n 50 "$log_file"
+        else
+          echo "(no log file exists)"
+        fi
+        echo ""
+        read -r -p "Press Enter to continue..."
+        ;;
+      clear-log)
+        local log_file="$CONFIG_DIR/debug.log"
+        if [[ -f "$log_file" ]]; then
+          read -r -p "Delete debug log? (y/n) " confirm
+          if [[ "${confirm,,}" == "y" ]]; then
+            if shred -u "$log_file" 2>/dev/null; then
+              echo "Debug log securely deleted."
+            else
+              rm -f "$log_file"
+              echo "Debug log deleted."
+            fi
+          fi
+        else
+          echo "No debug log exists."
+        fi
+        sleep 1
+        ;;
+    esac
+  done
 }
 
 # Main loop
