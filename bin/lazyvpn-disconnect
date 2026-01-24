@@ -48,9 +48,9 @@ NETDEV_FILE="/etc/systemd/network/99-${CONN_NAME}.netdev"
 NETWORK_FILE="/etc/systemd/network/99-${CONN_NAME}.network"
 
 if [ -f "$NETDEV_FILE" ] || [ -f "$NETWORK_FILE" ]; then
-    sudo "$SCRIPT_DIR/lazyvpn-file-helper" remove "$CONN_NAME" >/dev/null 2>&1 || {
+    sudo "$SCRIPT_DIR/lazyvpn-file-helper" remove "$CONN_NAME" || {
         # Fallback for backward compatibility if file helper not found
-        sudo rm -f "$NETDEV_FILE" "$NETWORK_FILE" 2>/dev/null || true
+        secure_delete --sudo "$NETDEV_FILE" "$NETWORK_FILE"
     }
 fi
 

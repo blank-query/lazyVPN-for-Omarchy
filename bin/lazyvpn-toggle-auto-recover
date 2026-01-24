@@ -23,7 +23,7 @@ if [[ "${AUTO_RECOVER:-true}" == "true" ]]; then
     MONITOR_PID=$(cat "$PID_FILE")
     if kill -0 "$MONITOR_PID" 2>/dev/null; then
       kill "$MONITOR_PID"
-      rm -f "$PID_FILE"
+      secure_delete "$PID_FILE"
     fi
   fi
 else

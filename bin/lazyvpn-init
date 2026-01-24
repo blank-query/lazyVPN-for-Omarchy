@@ -5,7 +5,10 @@
 CONFIG_DIR="$HOME/.config/lazyvpn"
 WG_DIR="$CONFIG_DIR/wireguard"
 CONFIG_FILE="$CONFIG_DIR/config"
-# shellcheck source=./lazyvpn-common
+
+# Source common functions for secure_delete
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" 2>/dev/null
 
 # Create directories
 if ! mkdir -p "$WG_DIR"; then
@@ -36,7 +39,7 @@ EOF
   if ! mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"; then
     echo "Error: Failed to create config file"
     echo "Check permissions on: $CONFIG_DIR"
-    rm -f "${CONFIG_FILE}.tmp"
+    secure_delete "${CONFIG_FILE}.tmp"
     exit 1
   fi
 }
@@ -67,7 +70,7 @@ fi
 STATE_FILE="$CONFIG_DIR/state"
 if [[ -f "$STATE_FILE" ]]; then
   echo "Removing deprecated state file..."
-  rm -f "$STATE_FILE"
+  secure_delete "$STATE_FILE"
 fi
 
 # Ensure ALLOW_LOCAL_NETWORK exists in config (for upgrades)
@@ -111,7 +114,7 @@ if grep -q "^HEALTH_MONITORING=" "$CONFIG_FILE" 2>/dev/null; then
   fi
 
   # Remove old log files (logging now uses debug.log via debug_log function)
-  rm -f "$CONFIG_DIR/health-monitor.log" "$CONFIG_DIR/auto-recover.log" 2>/dev/null
+  secure_delete "$CONFIG_DIR/health-monitor.log" "$CONFIG_DIR/auto-recover.log"
 fi
 
 # Ensure AUTO_RECOVER exists in config (for upgrades)

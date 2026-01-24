@@ -218,10 +218,9 @@ cleanup_failed_connection() {
 
   # Remove systemd-networkd config files using secure file helper
   if [[ -f "/etc/systemd/network/99-${CONN_NAME}.netdev" ]] || [[ -f "/etc/systemd/network/99-${CONN_NAME}.network" ]]; then
-    sudo "$SCRIPT_DIR/lazyvpn-file-helper" remove "$CONN_NAME" >/dev/null 2>&1 || {
-      # Fallback for backward compatibility if file helper not found
-      sudo rm "/etc/systemd/network/99-${CONN_NAME}.netdev" 2>/dev/null || true
-      sudo rm "/etc/systemd/network/99-${CONN_NAME}.network" 2>/dev/null || true
+    sudo "$SCRIPT_DIR/lazyvpn-file-helper" remove "$CONN_NAME" 2>&1 || {
+      # Fallback if file helper not found
+      secure_delete --sudo "/etc/systemd/network/99-${CONN_NAME}.netdev" "/etc/systemd/network/99-${CONN_NAME}.network"
     }
   fi
 

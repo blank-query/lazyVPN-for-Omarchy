@@ -61,7 +61,7 @@ fi
 if [[ "$source_type" == "Dynamic Server List" ]]; then
   # Build list of all dynamic servers
   TEMP_LIST=$(mktemp)
-  trap 'rm -f "$TEMP_LIST"' EXIT
+  trap 'secure_delete "$TEMP_LIST"' EXIT
 
   for provider_file in "$PROVIDERS_DIR"/*.conf; do
     [[ -f "$provider_file" ]] || continue
@@ -118,7 +118,7 @@ if [[ "$source_type" == "Dynamic Server List" ]]; then
 # Handle manual server selection
 else
   TEMP_LIST=$(mktemp)
-  trap 'rm -f "$TEMP_LIST"' EXIT
+  trap 'secure_delete "$TEMP_LIST"' EXIT
 
   for conf in "$WG_DIR"/*.conf; do
     [[ -f "$conf" ]] || continue

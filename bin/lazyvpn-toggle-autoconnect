@@ -20,7 +20,7 @@ if [[ "$AUTOCONNECT" == "true" ]]; then
   info "Disabling autoconnect..."
 
   # Remove autostart desktop file
-  rm -f "$DESKTOP_FILE"
+  secure_delete "$DESKTOP_FILE"
 else
   NEW_VALUE="true"
   info "Enabling autoconnect..."

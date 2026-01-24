@@ -89,7 +89,7 @@ fi
 
 # Create preview script as temp file
 PREVIEW_SCRIPT=$(mktemp)
-trap 'rm -f "$TEMP_LIST" "$PREVIEW_SCRIPT"' EXIT
+trap 'secure_delete "$TEMP_LIST" "$PREVIEW_SCRIPT"' EXIT
 
 cat > "$PREVIEW_SCRIPT" << 'PREVIEW_EOF'
 #!/bin/bash

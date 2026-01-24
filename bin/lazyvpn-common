@@ -225,7 +225,7 @@ atomic_config_update() {
             # Update existing line
             if ! sed "s|^${key}=.*|${key}=${value}|" "$config_file" > "${config_file}.tmp"; then
                 warn "Failed to update config (sed failed)"
-                rm -f "${config_file}.tmp"
+                secure_delete "${config_file}.tmp"
                 return 1
             fi
         else
@@ -241,7 +241,7 @@ atomic_config_update() {
     # Validate the temp file is valid bash
     if ! bash -n "${config_file}.tmp" 2>/dev/null; then
         warn "Generated config has invalid syntax - this is a bug"
-        rm -f "${config_file}.tmp"
+        secure_delete "${config_file}.tmp"
         return 1
     fi
 
@@ -260,7 +260,7 @@ atomic_config_update() {
         echo "║ Check: df -h $(dirname "$config_file")                 ║" >&2
         echo "║ Check: ls -la $config_file                             ║" >&2
         echo "╚════════════════════════════════════════════════════════╝" >&2
-        rm -f "${config_file}.tmp"
+        secure_delete "${config_file}.tmp"
         return 1
     fi
 
@@ -373,7 +373,7 @@ EOF
     if ! mv "${config_file}.tmp" "$config_file"; then
         echo "❌ Error: Failed to create config file"
         echo "   Check permissions on: $(dirname "$config_file")"
-        rm -f "${config_file}.tmp"
+        secure_delete "${config_file}.tmp"
         return 1
     fi
 
@@ -465,6 +465,183 @@ debug_log() {
             mv "$log_file.tmp" "$log_file"
         fi
     fi
+}
+
+# Securely delete files with interactive recovery on failure
+# Usage: secure_delete [--sudo] [file1] [file2] ...
+#   --sudo  Use sudo shred directly (for root-owned files)
+# Returns 0 if all files removed, 1 if any remain
+secure_delete() {
+    local use_sudo=false
+    if [[ "${1:-}" == "--sudo" ]]; then
+        use_sudo=true
+        shift
+    fi
+
+    local files=()
+    local shredded=0
+    local sudo_shredded=0
+    local insecure_deleted=0
+    local failed=0
+    local failed_files=()
+    local failed_errors=()
+
+    # Filter to only existing files
+    for f in "$@"; do
+        [[ -f "$f" ]] && files+=("$f")
+    done
+
+    # No existing files = silent success
+    [[ ${#files[@]} -eq 0 ]] && return 0
+
+    # Phase 1: Attempt shred on each file
+    for f in "${files[@]}"; do
+        local err
+        if [[ "$use_sudo" == true ]]; then
+            err=$(sudo shred -u "$f" 2>&1)
+        else
+            err=$(shred -u "$f" 2>&1)
+        fi
+        if [[ $? -eq 0 ]]; then
+            if [[ "$use_sudo" == true ]]; then
+                ((sudo_shredded++))
+            else
+                ((shredded++))
+            fi
+        else
+            failed_files+=("$f")
+            failed_errors+=("$err")
+        fi
+    done
+
+    # Phase 2: Fast path - all succeeded
+    if [[ ${#failed_files[@]} -eq 0 ]]; then
+        local total=$((shredded + sudo_shredded))
+        echo "✓ Securely deleted $total file(s)."
+        return 0
+    fi
+
+    # Phase 3: Failure report
+    echo ""
+    echo "── Secure Deletion Report ──"
+    if [[ "$use_sudo" == true ]]; then
+        echo "  Sudo Shredded: $sudo_shredded"
+    else
+        echo "  Shredded: $shredded"
+    fi
+    echo "  Failed:   ${#failed_files[@]}"
+    echo ""
+    echo "Errors:"
+    for i in "${!failed_files[@]}"; do
+        echo "  $(basename "${failed_files[$i]}"): ${failed_errors[$i]}"
+    done
+    echo ""
+    echo "Diagnostic command:"
+    if [[ "$use_sudo" == true ]]; then
+        echo "  sudo ls -laZ ${failed_files[*]}"
+    else
+        echo "  ls -laZ ${failed_files[*]}"
+    fi
+    echo ""
+    echo "Report issues: https://github.com/rigs05/lazyVPN-for-Omarchy/issues"
+    echo ""
+
+    # Phase 4: Interactive recovery
+    if [[ "$use_sudo" == true ]]; then
+        echo "How would you like to handle the ${#failed_files[@]} failed file(s)?"
+        echo "  1) Retry sudo shred (Secure) [Default]"
+        echo "  2) Force delete with sudo rm -f (Insecure)"
+        echo "  3) Cancel (Keep files)"
+        echo ""
+        read -rp "Choice [1]: " choice
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                for f in "${failed_files[@]}"; do
+                    if sudo shred -u "$f" 2>/dev/null; then
+                        ((sudo_shredded++))
+                    else
+                        echo "  Retry failed for: $(basename "$f")"
+                        read -rp "  Force delete with sudo rm -f (Insecure)? [Y/n]: " sub_choice
+                        sub_choice="${sub_choice:-Y}"
+                        if [[ "$sub_choice" =~ ^[Yy]$ ]]; then
+                            if sudo rm -f "$f" 2>/dev/null; then
+                                ((insecure_deleted++))
+                            else
+                                ((failed++))
+                            fi
+                        else
+                            ((failed++))
+                        fi
+                    fi
+                done
+                ;;
+            2)
+                for f in "${failed_files[@]}"; do
+                    if sudo rm -f "$f" 2>/dev/null; then
+                        ((insecure_deleted++))
+                    else
+                        ((failed++))
+                    fi
+                done
+                ;;
+            3)
+                failed=${#failed_files[@]}
+                echo "  Files preserved."
+                ;;
+        esac
+    else
+        echo "How would you like to handle the ${#failed_files[@]} failed file(s)?"
+        echo "  1) Try with sudo shred (Secure) [Default]"
+        echo "  2) Force delete insecurely (rm -f)"
+        echo "  3) Cancel (Keep files)"
+        echo ""
+        read -rp "Choice [1]: " choice
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                for f in "${failed_files[@]}"; do
+                    if sudo shred -u "$f" 2>/dev/null; then
+                        ((sudo_shredded++))
+                    else
+                        echo "  Sudo shred failed for: $(basename "$f")"
+                        read -rp "  Force delete with sudo rm -f (Insecure)? [Y/n]: " sub_choice
+                        sub_choice="${sub_choice:-Y}"
+                        if [[ "$sub_choice" =~ ^[Yy]$ ]]; then
+                            if sudo rm -f "$f" 2>/dev/null; then
+                                ((insecure_deleted++))
+                            else
+                                ((failed++))
+                            fi
+                        else
+                            ((failed++))
+                        fi
+                    fi
+                done
+                ;;
+            2)
+                for f in "${failed_files[@]}"; do
+                    if rm -f "$f" 2>/dev/null; then
+                        ((insecure_deleted++))
+                    else
+                        ((failed++))
+                    fi
+                done
+                ;;
+            3)
+                failed=${#failed_files[@]}
+                echo "  Files preserved."
+                ;;
+        esac
+    fi
+
+    # Phase 5: Final tally
+    echo ""
+    echo "✓ Final Status: $shredded Shredded, $sudo_shredded Sudo Shredded, $insecure_deleted Deleted Insecurely, $failed Failed"
+
+    [[ $failed -eq 0 ]] && return 0 || return 1
 }
 
 # Convert country code to flag emoji

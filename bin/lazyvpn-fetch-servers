@@ -54,7 +54,7 @@ fetch_raw_servers() {
 
     # Validate JSON
     if ! jq empty "${cache_file}.tmp" 2>/dev/null; then
-      rm -f "${cache_file}.tmp"
+      secure_delete "${cache_file}.tmp"
       if [[ -f "$cache_file" ]]; then
         warn "Downloaded data is invalid JSON, using cached data"
         return 0
@@ -108,7 +108,7 @@ filter_provider_servers() {
       ))
     | sort_by(.country, .city, .server_name)
   ' "$raw_file" > "${provider_file}.tmp" 2>/dev/null; then
-    rm -f "${provider_file}.tmp"
+    secure_delete "${provider_file}.tmp"
     error "Failed to filter servers for $provider"
   fi
 
@@ -117,7 +117,7 @@ filter_provider_servers() {
   server_count=$(jq 'length' "${provider_file}.tmp")
 
   if [[ "$server_count" -eq 0 ]]; then
-    rm -f "${provider_file}.tmp"
+    secure_delete "${provider_file}.tmp"
     error "No WireGuard servers found for ${PROVIDER_DISPLAY[$provider]}"
   fi
 

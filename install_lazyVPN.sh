@@ -9,6 +9,9 @@ LAZYVPN_BIN="$HOME/.local/share/lazyvpn/bin"
 OMARCHY_BIN="$HOME/.local/share/omarchy/bin"
 OMARCHY_MENU_FILE="$OMARCHY_BIN/omarchy-menu"
 
+# Source secure_delete from repo
+source "$SCRIPT_DIR/bin/lazyvpn-common" || { echo "Error: bin/lazyvpn-common not found in repo"; exit 1; }
+
 # Track installation state
 INSTALL_STARTED=false
 INSTALL_COMPLETE=false
@@ -31,7 +34,14 @@ cleanup_on_error() {
     else
       # Manual cleanup if uninstaller not yet installed
       echo "Cleaning up LazyVPN files..."
-      rm -rf "$LAZYVPN_BIN" 2>/dev/null || true
+      if [[ -d "$LAZYVPN_BIN" ]]; then
+        bin_files=()
+        for f in "$LAZYVPN_BIN"/*; do [[ -f "$f" ]] && bin_files+=("$f"); done
+        if [[ ${#bin_files[@]} -gt 0 ]]; then
+          secure_delete "${bin_files[@]}" || true
+        fi
+        rmdir "$LAZYVPN_BIN" 2>/dev/null || true
+      fi
 
       # Restore omarchy-menu backup if it exists
       if [[ -f "$OMARCHY_MENU_FILE.backup" ]]; then
@@ -222,6 +232,17 @@ cat > "$SUDOERS_TEMP" <<'SUDOERS_EOF'
 # Replaced direct sed/tee/rm/mv to prevent symlink attacks
 %wheel ALL=(ALL) NOPASSWD: /home/*/.local/share/lazyvpn/bin/lazyvpn-file-helper *
 
+# Secure deletion - shred and rm for root-owned LazyVPN files
+# Used by secure_delete --sudo during disconnect and uninstall
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/shred -u /etc/systemd/network/99-*
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/systemd/network/99-*
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/shred -u /etc/sysctl.d/99-lazyvpn-ipv6.conf
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/sysctl.d/99-lazyvpn-ipv6.conf
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/shred -u /etc/sudoers.d/lazyvpn
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/sudoers.d/lazyvpn
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/shred -u /var/log/journal/*/system*.journal
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /var/log/journal/*/system*.journal
+
 # Firewall management - iptables operations for LazyVPN killswitch
 # Restricted to LAZYVPN_OUT chain operations only
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables -N LAZYVPN_OUT
@@ -263,7 +284,7 @@ else
 fi
 
 # Clean up temp file
-rm -f "$SUDOERS_TEMP"
+secure_delete "$SUDOERS_TEMP" || true
 else
   echo "Skipping passwordless sudo configuration"
   echo "You will be prompted for password during VPN operations"

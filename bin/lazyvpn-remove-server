@@ -62,7 +62,7 @@ fi
 # Build list with validation and connection status for fzf
 echo "Scanning installed servers..."
 TEMP_LIST=$(mktemp)
-trap 'rm -f "$TEMP_LIST"' EXIT
+trap 'secure_delete "$TEMP_LIST"' EXIT
 
 while IFS= read -r conf_file; do
   filename=$(basename "$conf_file")
@@ -193,7 +193,7 @@ echo ""
 SELECTED=$(cat "$TEMP_LIST" | fzf --multi --prompt="Select configs to remove: " --delimiter='|' --with-nth=1 --preview="$PREVIEW_SCRIPT {}" --height=80% --ansi --bind='ctrl-a:toggle-all')
 
 # Clean up preview script
-rm -f "$PREVIEW_SCRIPT"
+secure_delete "$PREVIEW_SCRIPT"
 
 # If no files selected (user cancelled)
 if [[ -z "$SELECTED" ]]; then
@@ -216,10 +216,9 @@ while IFS='|' read -r display_name file_path validation_status is_connected; do
     ((SKIPPED_CONNECTED++))
   else
     # Securely delete the config file (contains private keys)
-    if shred -u "$file_path" 2>/dev/null; then
-      : # Successfully shredded
-    else
-      rm -f "$file_path"  # Fallback to regular deletion
+    if ! secure_delete "$file_path"; then
+      echo "  ⚠️  Could not delete: $(basename "$file_path")"
+      continue  # skip config updates for this file
     fi
 
     # Check and update config file if this was the last connected server

@@ -9,6 +9,11 @@ echo ""
 
 # --- Define Paths ---
 LAZYVPN_BIN="$HOME/.local/share/lazyvpn/bin"
+
+# Source common functions (must happen before bin dir is removed in Step 2)
+if [[ -f "$LAZYVPN_BIN/lazyvpn-common" ]]; then
+  source "$LAZYVPN_BIN/lazyvpn-common"
+fi
 OMARCHY_BIN="$HOME/.local/share/omarchy/bin"
 CONFIG_DIR="$HOME/.config/lazyvpn"
 AUTOSTART_FILE="$HOME/.config/autostart/lazyvpn.desktop"
@@ -56,8 +61,7 @@ if [[ "$VPN_CONNECTED" == "true" ]]; then
     else
       # Manual disconnect if script not available
       echo "  - Removing systemd-networkd configuration files..."
-      sudo rm -f "/etc/systemd/network/99-${CONNECTION_NAME}.netdev" 2>/dev/null
-      sudo rm -f "/etc/systemd/network/99-${CONNECTION_NAME}.network" 2>/dev/null
+      secure_delete --sudo "/etc/systemd/network/99-${CONNECTION_NAME}.netdev" "/etc/systemd/network/99-${CONNECTION_NAME}.network"
 
       echo "  - Removing VPN interface..."
       sudo ip link delete "$CONNECTION_NAME" 2>/dev/null || true
@@ -73,7 +77,7 @@ if [[ "$VPN_CONNECTED" == "true" ]]; then
     echo "⚠️  Proceeding with uninstall while VPN is connected."
     echo "   You may need to manually disconnect after uninstall:"
     echo "   sudo ip link delete $CONNECTION_NAME"
-    echo "   sudo rm -f /etc/systemd/network/99-${CONNECTION_NAME}.*"
+    echo "   sudo shred -u /etc/systemd/network/99-${CONNECTION_NAME}.*"
     echo "   sudo systemctl restart systemd-networkd"
     echo ""
     read -r -p "Press Enter to continue with uninstall..."
@@ -148,7 +152,7 @@ if [[ -f /etc/sysctl.d/99-lazyvpn-ipv6.conf ]]; then
   sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1
   sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1
   sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null 2>&1
-  sudo rm -f /etc/sysctl.d/99-lazyvpn-ipv6.conf
+  secure_delete --sudo /etc/sysctl.d/99-lazyvpn-ipv6.conf
   echo "    - IPv6 re-enabled"
 fi
 
@@ -162,11 +166,15 @@ fi
 echo ""
 
 # --- Step 2: Remove LazyVPN scripts and directory ---
-echo "Step 2: Removing LazyVPN scripts..."
+echo "Step 2: Securely removing LazyVPN scripts..."
 if [[ -d "$LAZYVPN_BIN" ]]; then
-  script_count=$(find "$LAZYVPN_BIN" -name "lazyvpn-*" 2>/dev/null | wc -l)
-  rm -rf "$LAZYVPN_BIN"
-  echo "  - Removed LazyVPN directory ($script_count scripts)"
+  bin_files=()
+  for f in "$LAZYVPN_BIN"/*; do [[ -f "$f" ]] && bin_files+=("$f"); done
+  if [[ ${#bin_files[@]} -gt 0 ]]; then
+    secure_delete "${bin_files[@]}"
+  fi
+  # Remove directory structure
+  rmdir "$LAZYVPN_BIN" 2>/dev/null
 
   # Also remove parent directory if empty
   LAZYVPN_SHARE="$(dirname "$LAZYVPN_BIN")"
@@ -221,7 +229,7 @@ if grep -q "LazyVPN" "$OMARCHY_MENU_FILE"; then
       echo "  ⚠ WARNING: Backup not found. omarchy-menu may need manual repair."
       echo "  You can restore Omarchy by reinstalling it."
     fi
-    rm -f "$OMARCHY_MENU_FILE.tmp"
+    secure_delete "$OMARCHY_MENU_FILE.tmp"
   fi
 
   echo "  - Restarting menu to apply changes..."
@@ -360,7 +368,7 @@ echo ""
 # --- Step 7: Remove Autostart entry ---
 echo "Step 7: Removing Autostart entry..."
 if [[ -f "$AUTOSTART_FILE" ]]; then
-  rm -f "$AUTOSTART_FILE"
+  secure_delete "$AUTOSTART_FILE"
   echo "  - Removed autostart file."
 else
   echo "  - No autostart file found."
@@ -391,58 +399,51 @@ if [[ ! -d "$CONFIG_DIR" ]]; then
 else
   # Securely delete LazyVPN's own config files (not server configs)
   echo "  - Securely deleting LazyVPN config and cache files..."
-  shredded_count=0
-  for config_file in "$CONFIG_DIR"/config "$CONFIG_DIR"/.server-list-cache "$CONFIG_DIR"/favorites "$CONFIG_DIR"/.auto-recover.pid "$CONFIG_DIR"/auto-recover.log "$CONFIG_DIR"/debug.log "$CONFIG_DIR"/state; do
-    if [[ -f "$config_file" ]]; then
-      if shred -u "$config_file" 2>/dev/null; then
-        echo "    ✓ Securely deleted: $(basename "$config_file")"
-        ((shredded_count++))
-      else
-        rm -f "$config_file"  # Fallback to regular deletion
-      fi
-    fi
-  done
+  secure_delete "$CONFIG_DIR/config" "$CONFIG_DIR/.server-list-cache" \
+    "$CONFIG_DIR/favorites" "$CONFIG_DIR/.auto-recover.pid" \
+    "$CONFIG_DIR/auto-recover.log" "$CONFIG_DIR/debug.log" "$CONFIG_DIR/state"
 
   # Securely delete provider credentials (contains private keys!)
   PROVIDERS_DIR="$CONFIG_DIR/providers"
-  if [[ -d "$PROVIDERS_DIR" ]] && ls "$PROVIDERS_DIR"/*.conf 1>/dev/null 2>&1; then
-    echo "  - Securely deleting provider credentials (contains private keys)..."
-    for provider_file in "$PROVIDERS_DIR"/*.conf; do
-      if shred -u "$provider_file" 2>/dev/null; then
-        echo "    ✓ Securely deleted: $(basename "$provider_file")"
-      else
-        rm -f "$provider_file"  # Fallback to regular deletion
-        echo "    - Deleted: $(basename "$provider_file")"
-      fi
-    done
+  if [[ -d "$PROVIDERS_DIR" ]]; then
+    provider_files=()
+    for f in "$PROVIDERS_DIR"/*.conf; do [[ -f "$f" ]] && provider_files+=("$f"); done
+    if [[ ${#provider_files[@]} -gt 0 ]]; then
+      echo "  - Securely deleting provider credentials (contains private keys)..."
+      secure_delete "${provider_files[@]}"
+    fi
     rmdir "$PROVIDERS_DIR" 2>/dev/null
   fi
 
-  # Delete server cache (not sensitive, just cached data)
+  # Securely delete server cache (shows VPN provider usage)
   CACHE_DIR="$CONFIG_DIR/cache"
   if [[ -d "$CACHE_DIR" ]]; then
-    echo "  - Removing server cache..."
-    rm -rf "$CACHE_DIR"
-    echo "    ✓ Removed cache directory"
+    echo "  - Securely deleting server cache..."
+    cache_files=()
+    for f in "$CACHE_DIR"/*; do [[ -f "$f" ]] && cache_files+=("$f"); done
+    [[ ${#cache_files[@]} -gt 0 ]] && secure_delete "${cache_files[@]}"
+    rmdir "$CACHE_DIR" 2>/dev/null
   fi
 
   # Handle WireGuard server configs based on user choice
   if [[ "$delete_configs" =~ ^[Yy]$ ]]; then
     # User wants to delete server configs - shred them
-    if [[ -d "$WG_CONFIG_DIR" ]] && ls "$WG_CONFIG_DIR"/*.conf 1>/dev/null 2>&1; then
-      echo "  - Securely deleting WireGuard server configs..."
-      for conf_file in "$WG_CONFIG_DIR"/*.conf; do
-        if shred -u "$conf_file" 2>/dev/null; then
-          echo "    ✓ Securely deleted: $(basename "$conf_file")"
-        else
-          echo "    ✗ Failed to securely delete: $(basename "$conf_file")"
-          rm -f "$conf_file"  # Fallback to regular deletion
-        fi
-      done
+    if [[ -d "$WG_CONFIG_DIR" ]]; then
+      wg_files=()
+      for f in "$WG_CONFIG_DIR"/*.conf; do [[ -f "$f" ]] && wg_files+=("$f"); done
+      if [[ ${#wg_files[@]} -gt 0 ]]; then
+        echo "  - Securely deleting WireGuard server configs..."
+        secure_delete "${wg_files[@]}"
+      fi
     fi
-    # Remove the entire config directory
-    rm -rf "$CONFIG_DIR"
-    echo "  - Removed entire configuration directory: $CONFIG_DIR"
+    # Remove the config directory structure (files already shredded)
+    rmdir "$WG_CONFIG_DIR" 2>/dev/null
+    rmdir "$CONFIG_DIR" 2>/dev/null
+    if [[ -d "$CONFIG_DIR" ]]; then
+      echo "  - Some files could not be removed. Directory preserved: $CONFIG_DIR"
+    else
+      echo "  - Removed configuration directory: $CONFIG_DIR"
+    fi
   else
     # User wants to keep server configs - preserve wireguard folder
     echo "  - Preserved WireGuard server configs in: $WG_CONFIG_DIR"
@@ -457,22 +458,7 @@ NETWORK_FILE="/etc/systemd/network/99-${CONNECTION_NAME}.network"
 
 if [[ -f "$NETDEV_FILE" ]] || [[ -f "$NETWORK_FILE" ]]; then
   echo "  - Found leftover systemd-networkd files. Securely deleting..."
-  if [[ -f "$NETDEV_FILE" ]]; then
-    if sudo shred -u "$NETDEV_FILE" 2>/dev/null; then
-      echo "    ✓ Securely deleted: $NETDEV_FILE"
-    else
-      sudo rm -f "$NETDEV_FILE" 2>/dev/null  # Fallback
-      echo "    - Removed: $NETDEV_FILE"
-    fi
-  fi
-  if [[ -f "$NETWORK_FILE" ]]; then
-    if sudo shred -u "$NETWORK_FILE" 2>/dev/null; then
-      echo "    ✓ Securely deleted: $NETWORK_FILE"
-    else
-      sudo rm -f "$NETWORK_FILE" 2>/dev/null  # Fallback
-      echo "    - Removed: $NETWORK_FILE"
-    fi
-  fi
+  secure_delete --sudo "$NETDEV_FILE" "$NETWORK_FILE"
 
   # Check if interface still exists
   if ip link show "$CONNECTION_NAME" &>/dev/null; then
@@ -491,18 +477,7 @@ echo ""
 # --- Step 11: Remove sudoers configuration ---
 echo "Step 11: Removing sudoers configuration..."
 if sudo test -f /etc/sudoers.d/lazyvpn; then
-  if sudo rm -f /etc/sudoers.d/lazyvpn; then
-    # Verify it's actually gone
-    if sudo test -f /etc/sudoers.d/lazyvpn; then
-      echo "  ⚠ WARNING: Failed to remove sudoers file!"
-      echo "  Please manually remove: sudo rm /etc/sudoers.d/lazyvpn"
-    else
-      echo "  ✓ Removed sudoers configuration"
-    fi
-  else
-    echo "  ⚠ ERROR: Failed to remove sudoers configuration"
-    echo "  Please manually remove: sudo rm /etc/sudoers.d/lazyvpn"
-  fi
+  secure_delete --sudo /etc/sudoers.d/lazyvpn
 else
   echo "  - No sudoers configuration found"
 fi
@@ -596,19 +571,7 @@ if [[ "$clear_logs" =~ ^[Yy]$ ]]; then
 
           echo ""
           echo "  - Securely deleting journal files with VPN logs..."
-          shredded=0
-          failed=0
-
-          for journal_file in "${VPN_JOURNALS[@]}"; do
-            filename=$(basename "$journal_file")
-            if sudo shred -u "$journal_file" 2>/dev/null; then
-              echo "    ✓ Securely deleted: $filename"
-              ((shredded++))
-            else
-              echo "    ✗ Failed to shred: $filename"
-              ((failed++))
-            fi
-          done
+          secure_delete --sudo "${VPN_JOURNALS[@]}"
 
           echo ""
           echo "  - Restarting systemd-journald..."
@@ -619,12 +582,6 @@ if [[ "$clear_logs" =~ ^[Yy]$ ]]; then
             JOURNALD_STOPPED=false
             trap - EXIT INT TERM  # Remove trap after successful restart
             echo "    ✓ systemd-journald restarted successfully"
-            echo ""
-            echo "    Summary:"
-            echo "      • Securely deleted: $shredded journal file(s)"
-            if [[ $failed -gt 0 ]]; then
-              echo "      • Failed: $failed journal file(s)"
-            fi
             clean_count=$((TOTAL_JOURNALS - VPN_COUNT))
             echo "      • Preserved: $clean_count journal file(s) without VPN logs"
           else
@@ -684,26 +641,24 @@ for hist_file in "${HISTORY_FILES[@]}"; do
 
       if [[ $removed_lines -gt 0 ]]; then
         # Securely delete the original file (contains VPN commands)
-        if shred -u "$hist_file" 2>/dev/null; then
-          # Replace with cleaned version
+        if secure_delete "$hist_file"; then
           mv "$temp_hist" "$hist_file"
           echo "  ✓ Cleaned $shell_name history: securely removed $removed_lines line(s)"
-          ((cleaned_count++))
         else
-          # Shred failed, fallback to regular replacement
+          # secure_delete failed or user cancelled - still overwrite to remove VPN evidence
           mv "$temp_hist" "$hist_file"
-          echo "  ✓ Cleaned $shell_name history: removed $removed_lines line(s) (shred unavailable)"
-          ((cleaned_count++))
+          echo "  ✓ Cleaned $shell_name history: removed $removed_lines line(s) (overwrite only)"
         fi
+        ((cleaned_count++))
       else
-        # No VPN commands found
-        rm -f "$temp_hist"
+        # No VPN commands found - clean up temp file
+        secure_delete "$temp_hist"
         echo "  - $shell_name history: no VPN commands found"
         ((skipped_count++))
       fi
     else
-      # Grep failed, preserve original
-      rm -f "$temp_hist"
+      # Grep failed, preserve original - clean up temp file
+      secure_delete "$temp_hist"
       echo "  ✗ Failed to clean $shell_name history"
     fi
   fi

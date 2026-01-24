@@ -55,7 +55,7 @@ validate_config() {
 # Build list with provider detection and validation for fzf
 echo "Validating and detecting providers..."
 TEMP_LIST=$(mktemp)
-trap 'rm -f "$TEMP_LIST"' EXIT
+trap 'secure_delete "$TEMP_LIST"' EXIT
 
 while IFS= read -r conf_file; do
   filename=$(basename "$conf_file")
@@ -184,7 +184,7 @@ echo ""
 SELECTED=$(cat "$TEMP_LIST" | fzf --multi --prompt="Select configs: " --delimiter='|' --with-nth=1 --preview="$PREVIEW_SCRIPT {}" --height=80% --ansi --bind='ctrl-a:toggle-all')
 
 # Clean up preview script
-rm -f "$PREVIEW_SCRIPT"
+secure_delete "$PREVIEW_SCRIPT"
 
 # If no files selected (user cancelled)
 if [[ -z "$SELECTED" ]]; then
@@ -230,7 +230,7 @@ while IFS='|' read -r display_name file_path validation_status is_duplicate; do
       # Validate the copied file to ensure it wasn't corrupted during copy/rename
       if ! validate_config "$WG_DIR/${std_name}.conf"; then
         echo "  ✗ Skipped (validation failed after copy): $std_name"
-        rm -f "$WG_DIR/${std_name}.conf"  # Clean up the invalid file
+        secure_delete "$WG_DIR/${std_name}.conf"  # Clean up the invalid file
         ((SKIPPED_INVALID++))
       else
         # Show pretty name for what was copied
@@ -281,15 +281,9 @@ if [[ ${#ADDED_FILES[@]} -gt 0 ]]; then
     [yY][eE][sS]|[yY])
       echo ""
       echo "Securely deleting original files..."
-      for file in "${ADDED_FILES[@]}"; do
-        if shred -u "$file" 2>/dev/null; then
-          echo "  ✓ Securely deleted: $(basename "$file")"
-        else
-          echo "  ✗ Failed to delete: $(basename "$file")"
-        fi
-      done
+      secure_delete "${ADDED_FILES[@]}"
       echo ""
-      echo "Cleanup complete (files overwritten and deleted)."
+      echo "Cleanup complete."
       ;;
     *)
       echo ""

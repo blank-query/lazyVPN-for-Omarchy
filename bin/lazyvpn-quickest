@@ -82,7 +82,7 @@ echo "Testing $TOTAL_SERVERS servers in batches of $BATCH_SIZE..."
 echo ""
 
 RESULTS_DIR=$(mktemp -d)
-trap 'rm -rf "$RESULTS_DIR"' EXIT
+trap 'secure_delete "$RESULTS_DIR"/*; rmdir "$RESULTS_DIR" 2>/dev/null' EXIT
 
 # Test a single server (runs in background)
 test_server() {
@@ -156,7 +156,7 @@ for (( i=0; i<TOTAL_SERVERS; i+=BATCH_SIZE )); do
       fi
     fi
 
-    rm -f "$result_file"
+    secure_delete "$result_file"
   done
 
   TESTED=$batch_end

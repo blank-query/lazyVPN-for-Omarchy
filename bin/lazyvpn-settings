@@ -279,12 +279,7 @@ check_all_logging_off() {
       echo ""
       read -r -p "All logging disabled. Securely delete debug log? (y/n) " del_response
       if [[ "${del_response,,}" == "y" ]]; then
-        if shred -u "$log_file" 2>/dev/null; then
-          echo "Debug log securely deleted."
-        else
-          rm -f "$log_file"
-          echo "Debug log deleted."
-        fi
+        secure_delete "$log_file"
         sleep 1
       fi
     fi
@@ -436,12 +431,7 @@ show_debug_menu() {
         if [[ -f "$log_file" ]]; then
           read -r -p "Delete debug log? (y/n) " confirm
           if [[ "${confirm,,}" == "y" ]]; then
-            if shred -u "$log_file" 2>/dev/null; then
-              echo "Debug log securely deleted."
-            else
-              rm -f "$log_file"
-              echo "Debug log deleted."
-            fi
+            secure_delete "$log_file"
           fi
         else
           echo "No debug log exists."

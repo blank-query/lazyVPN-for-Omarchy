@@ -270,12 +270,7 @@ if save_provider_credentials "$PROVIDER" "$PRIVATE_KEY" "$ADDRESS"; then
   read -rp "Delete source config? [y/N]: " delete_source
 
   if [[ "$delete_source" =~ ^[Yy]$ ]]; then
-    if shred -u "$CONFIG_FILE" 2>/dev/null; then
-      echo "Securely deleted: $(basename "$CONFIG_FILE")"
-    else
-      rm -f "$CONFIG_FILE"
-      echo "Deleted: $(basename "$CONFIG_FILE")"
-    fi
+    secure_delete "$CONFIG_FILE"
   else
     echo "Source config kept."
   fi

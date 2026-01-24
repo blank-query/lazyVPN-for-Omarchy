@@ -90,7 +90,7 @@ else
   sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null
 
   # Remove persistent config
-  rm -f "$SYSCTL_CONF"
+  secure_delete "$SYSCTL_CONF"
 
   info "✓ IPv6 enabled at kernel level"
 

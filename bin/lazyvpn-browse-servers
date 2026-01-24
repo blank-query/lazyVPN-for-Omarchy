@@ -205,7 +205,7 @@ browse_servers() {
   header_script=$(mktemp)
   list_script=$(mktemp)
   provider_state=$(mktemp)
-  trap "rm -f '$filter_state' '$preview_script' '$filter_script' '$header_script' '$list_script' '$provider_state'" EXIT
+  trap "secure_delete '$filter_state' '$preview_script' '$filter_script' '$header_script' '$list_script' '$provider_state'" EXIT
 
   # Initialize filter state (0 = off, 1 = on)
   cat > "$filter_state" << EOF
@@ -325,7 +325,7 @@ EOF
   local provider_cycle_script favorite_script
   provider_cycle_script=$(mktemp)
   favorite_script=$(mktemp)
-  trap "rm -f '$filter_state' '$preview_script' '$filter_script' '$header_script' '$list_script' '$provider_state' '$provider_cycle_script' '$favorite_script'" EXIT
+  trap "secure_delete '$filter_state' '$preview_script' '$filter_script' '$header_script' '$list_script' '$provider_state' '$provider_cycle_script' '$favorite_script'" EXIT
 
   cat > "$provider_cycle_script" << 'CYCLE_EOF'
 #!/bin/bash

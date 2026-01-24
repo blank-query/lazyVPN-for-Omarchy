@@ -211,7 +211,7 @@ run_latency_test() {
 
   RESULTS_DIR=$(mktemp -d)
   RESULTS_FILE=$(mktemp)
-  trap 'rm -rf "$RESULTS_DIR" "$RESULTS_FILE"' EXIT
+  trap 'secure_delete "$RESULTS_DIR"/* "$RESULTS_FILE"; rmdir "$RESULTS_DIR" 2>/dev/null' EXIT
 
   BEST_SERVER=""
   BEST_LATENCY=99999
@@ -267,7 +267,7 @@ run_latency_test() {
           BEST_SERVER="$server_id"
         fi
       fi
-      rm -f "$result_file"
+      secure_delete "$result_file"
     done
 
     tested=$batch_end
@@ -327,7 +327,7 @@ save_latency_results() {
       fi
     done <<< "${provider_results[$provider]}"
 
-    rm -f "$tmp_file"
+    secure_delete "$tmp_file"
   done
 
   echo "Latency results saved." >&2

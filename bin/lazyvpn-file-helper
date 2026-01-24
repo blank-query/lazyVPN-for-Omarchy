@@ -3,13 +3,15 @@
 # LazyVPN File Helper - Secure sudo wrapper for file operations
 # This script validates all inputs before performing privileged file operations
 
-set -e
-
 # Must run as root
 if [[ $EUID -ne 0 ]]; then
   echo "Error: This script must be run with sudo"
   exit 1
 fi
+
+# Source common functions (for secure_delete)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lazyvpn-common" 2>/dev/null
 
 # Validate connection name (alphanumeric, dash, underscore only)
 validate_conn_name() {
@@ -130,8 +132,7 @@ case "$1" in
     validate_path "$NETDEV"
     validate_path "$NETWORK"
 
-    rm -f "$NETDEV" "$NETWORK"
-    echo "Removed: $NETDEV $NETWORK"
+    secure_delete "$NETDEV" "$NETWORK"
     ;;
 
   rename)
@@ -154,14 +155,14 @@ case "$1" in
       sed "s/^Name=.*/Name=$3/" "$OLD_NETDEV" > "$NEW_NETDEV"
       chmod 640 "$NEW_NETDEV"
       chown root:systemd-network "$NEW_NETDEV"
-      rm -f "$OLD_NETDEV"
     fi
 
     if [[ -f "$OLD_NETWORK" ]]; then
       sed "s/^Name=.*/Name=$3/" "$OLD_NETWORK" > "$NEW_NETWORK"
       chmod 644 "$NEW_NETWORK"
-      rm -f "$OLD_NETWORK"
     fi
+
+    secure_delete "$OLD_NETDEV" "$OLD_NETWORK"
 
     echo "Renamed: $2 -> $3"
     ;;

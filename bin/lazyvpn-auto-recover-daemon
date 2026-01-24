@@ -20,7 +20,7 @@ if [[ -f "$PID_FILE" ]]; then
     exit 0
   else
     # Stale PID file
-    rm -f "$PID_FILE"
+    secure_delete "$PID_FILE"
   fi
 fi
 
@@ -29,7 +29,7 @@ echo $$ > "$PID_FILE"
 
 # Cleanup on exit
 cleanup() {
-  rm -f "$PID_FILE"
+  secure_delete "$PID_FILE"
   exit 0
 }
 trap cleanup EXIT INT TERM
