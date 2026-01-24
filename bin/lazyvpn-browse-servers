@@ -542,22 +542,24 @@ output_servers() {
         entry_flag="${RI[${entry_cc:0:1}]}${RI[${entry_cc:1:1}]}"
         exit_flag="${RI[${exit_cc:0:1}]}${RI[${exit_cc:1:1}]}"
         entry_name="${COUNTRY_NAME[$entry_cc]:-$entry_cc}"
-        display="${fav_star}$entry_flag $entry_name → $exit_flag $country"
+        display="$entry_flag $entry_name → $exit_flag $country"
       else
         flag=""
         [[ ${#cc} -eq 2 ]] && flag="${RI[${cc:0:1}]}${RI[${cc:1:1}]}"
-        display="${fav_star}$flag $country"
+        display="$flag $country"
       fi
       [[ -n "$city" ]] && display+=" - $city"
       display+=" ($server_name)"
       [[ -n "$features" ]] && display+=" $features"
+      [[ -n "$fav_star" ]] && display+=" $fav_star"
     else
       flag=""
       [[ ${#cc} -eq 2 ]] && flag="${RI[${cc:0:1}]}${RI[${cc:1:1}]}"
-      display="${fav_star}$flag $country"
+      display="$flag $country"
       [[ -n "$city" ]] && display+=" - $city"
       display+=" ($server_name)"
       [[ -n "$features" ]] && display+=" $features"
+      [[ -n "$fav_star" ]] && display+=" $fav_star"
     fi
     echo "${display}|${server_name}|${provider_key}"
   done
@@ -571,7 +573,7 @@ if [[ "$current" == "ALL" ]]; then
       cache="$CACHE_DIR/${p}_servers.json"
       [[ -f "$cache" ]] && output_servers "$cache" "$p"
     done
-  } | sort -t'|' -k2,2
+  } | sort -t'|' -k1,1
 else
   cache="$CACHE_DIR/${current}_servers.json"
   [[ -f "$cache" ]] && output_servers "$cache" "$current"
