@@ -465,8 +465,17 @@ else
 fi
 echo ""
 
-# --- Step 11: Clean up system logs (surgical approach) ---
-echo "Step 11: System log cleanup (optional)..."
+# --- Step 11: Remove sudoers configuration ---
+echo "Step 11: Removing sudoers configuration..."
+if sudo test -f /etc/sudoers.d/lazyvpn; then
+  secure_delete --sudo /etc/sudoers.d/lazyvpn
+else
+  echo "  - No sudoers configuration found"
+fi
+echo ""
+
+# --- Step 12: Clean up system logs (surgical approach) ---
+echo "Step 12: System log cleanup (optional)..."
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  Privacy Note: System Logs"
@@ -600,8 +609,8 @@ else
 fi
 echo ""
 
-# --- Step 12: Clean up shell history ---
-echo "Step 12: Cleaning shell history..."
+# --- Step 13: Clean up shell history ---
+echo "Step 13: Cleaning shell history..."
 echo ""
 echo "Removing VPN-related commands from shell history files..."
 
@@ -663,15 +672,6 @@ if [[ $cleaned_count -eq 0 ]] && [[ $skipped_count -eq 0 ]]; then
 else
   echo ""
   echo "  Summary: Cleaned $cleaned_count history file(s), $skipped_count had no VPN commands"
-fi
-echo ""
-
-# --- Step 13: Remove sudoers configuration ---
-echo "Step 13: Removing sudoers configuration..."
-if sudo test -f /etc/sudoers.d/lazyvpn; then
-  secure_delete --sudo /etc/sudoers.d/lazyvpn
-else
-  echo "  - No sudoers configuration found"
 fi
 echo ""
 

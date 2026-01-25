@@ -320,6 +320,16 @@ fi
 # Store public IP for waybar tooltip
 atomic_config_update "LAST_PUBLIC_IP" "$PUBLIC_IP" "$USER_CONFIG_FILE"
 
+# Start auto-recover daemon if enabled and not already running
+if [[ "${AUTO_RECOVER:-true}" == "true" ]]; then
+  PID_FILE="$CONFIG_DIR/.auto-recover.pid"
+  if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    : # Already running
+  else
+    nohup "$SCRIPT_DIR/lazyvpn-auto-recover-daemon" >/dev/null 2>&1 &
+  fi
+fi
+
 # Post-connection options
 echo ""
 echo "[Enter] Done  [d] DNS Leak Test  [s] Speedtest  [l] Latency"
