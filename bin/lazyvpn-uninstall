@@ -490,19 +490,19 @@ echo "════════════════════════�
 echo "  Privacy Note: System Logs"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
-echo "LazyVPN connection history may exist in systemd journal logs."
-echo "These logs contain:"
-echo "  • Timestamps of VPN connections/disconnections"
-echo "  • Interface names (e.g., ${CONNECTION_NAME:-wg0})"
-echo "  • Configuration file paths"
+echo "VPN evidence may exist in systemd journal logs, including:"
+echo "  • Connection timestamps and interface names (${CONNECTION_NAME:-wg0})"
+echo "  • Sudo commands referencing lazyvpn scripts"
+echo "  • App launch logs referencing lazyvpn commands"
+echo "  • Configuration file paths and provider names"
 echo ""
-echo "LazyVPN can surgically identify and securely delete ONLY the"
-echo "journal files containing VPN logs, preserving other system logs."
+echo "LazyVPN will scan ALL journal files (system and user) for any"
+echo "VPN-related content and securely delete only those files."
 echo ""
 echo "⚠️  WARNING: This will:"
 echo "   • Stop systemd-journald temporarily"
-echo "   • Shred journal files containing VPN connection history"
-echo "   • Preserve journal files from periods without VPN activity"
+echo "   • Shred journal files containing any VPN evidence"
+echo "   • Preserve journal files with no VPN references"
 echo "   • Restart systemd-journald"
 echo ""
 read -r -p "Securely remove journal files containing VPN logs? [y/N]: " clear_logs
@@ -524,26 +524,37 @@ if [[ "$clear_logs" =~ ^[Yy]$ ]]; then
     if [[ ! -d "$JOURNAL_DIR" ]]; then
       echo "    ✗ Journal directory not found"
     else
-      # Find all system journal files and check for VPN logs
+      # Scan ALL journal files (system + user) for VPN evidence
       VPN_JOURNALS=()
       INTERFACE_NAME="${CONNECTION_NAME:-wg0}"
 
-      for journal_file in "$JOURNAL_DIR"/system*.journal; do
-        if [[ -f "$journal_file" ]]; then
-          # Check if this journal contains VPN logs
-          if journalctl --file="$journal_file" -u systemd-networkd --no-pager 2>/dev/null | grep -q "$INTERFACE_NAME"; then
+      # Collect all journal files (including .journal~ from unclean shutdowns)
+      ALL_JOURNALS=()
+      while IFS= read -r jf; do
+        ALL_JOURNALS+=("$jf")
+      done < <(find "$JOURNAL_DIR" -type f \( -name '*.journal' -o -name '*.journal~' \) 2>/dev/null)
+      TOTAL_JOURNALS=${#ALL_JOURNALS[@]}
+
+      if [[ $TOTAL_JOURNALS -eq 0 ]]; then
+        echo "    ✗ No journal files found"
+      else
+        echo "    Scanning $TOTAL_JOURNALS journal files..."
+
+        # Use journalctl to properly decompress and search each journal file
+        # (journals use ZSTD compression — raw grep on binary files misses compressed entries)
+        for journal_file in "${ALL_JOURNALS[@]}"; do
+          if journalctl --file="$journal_file" -o short --no-pager 2>/dev/null | grep -qiE "lazyvpn|wireguard|$INTERFACE_NAME"; then
             VPN_JOURNALS+=("$journal_file")
           fi
-        fi
-      done
+        done
 
-      TOTAL_JOURNALS=$(find "$JOURNAL_DIR" -name "system*.journal" -type f | wc -l)
-      VPN_COUNT=${#VPN_JOURNALS[@]}
+        VPN_COUNT=${#VPN_JOURNALS[@]}
+        CLEAN_COUNT=$((TOTAL_JOURNALS - VPN_COUNT))
 
-      echo "    Found VPN logs in $VPN_COUNT of $TOTAL_JOURNALS system journal files"
+        echo "    Found VPN evidence in $VPN_COUNT of $TOTAL_JOURNALS journal files"
 
       if [[ $VPN_COUNT -eq 0 ]]; then
-        echo "    ✓ No VPN logs found in journal files"
+        echo "    ✓ No VPN evidence found in journal files"
       else
         # Setup cleanup trap to ensure journald always restarts
         JOURNALD_STOPPED=false
@@ -582,8 +593,8 @@ if [[ "$clear_logs" =~ ^[Yy]$ ]]; then
             JOURNALD_STOPPED=false
             trap - EXIT INT TERM  # Remove trap after successful restart
             echo "    ✓ systemd-journald restarted successfully"
-            clean_count=$((TOTAL_JOURNALS - VPN_COUNT))
-            echo "      • Preserved: $clean_count journal file(s) without VPN logs"
+            echo "      • Shredded: $VPN_COUNT journal file(s) with VPN evidence"
+            echo "      • Preserved: $CLEAN_COUNT journal file(s) without VPN references"
           else
             echo "    ✗ Failed to restart systemd-journald"
             echo "    Please manually start it: sudo systemctl start systemd-journald"
@@ -591,6 +602,7 @@ if [[ "$clear_logs" =~ ^[Yy]$ ]]; then
         else
           echo "    ✗ Failed to stop systemd-journald"
         fi
+      fi
       fi
     fi
   fi

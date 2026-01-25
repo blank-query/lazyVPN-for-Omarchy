@@ -200,6 +200,14 @@ The installer configures `/etc/sudoers.d/lazyvpn` to allow passwordless executio
 - **On-Demand Only:** Server lists are only refreshed when you explicitly run the fetch command or select "Refresh" in the menu.
 - **No Background Chatter:** The auto-recover daemon only pings your VPN endpoint to check connectivity; it sends no other data.
 
+### 5. Verified Secure Deletion
+LazyVPN doesn't just "delete" files; it ensures they are irrecoverable.
+
+*   **Shred-by-Default:** Uses `shred -u` (3-pass overwrite) for all credentials, configs, and logs.
+*   **Smart Journal Scrubbing:** Instead of nuking your entire system log, it identifies specific binary journal files containing VPN traces (IPs, server names, interface IDs) and shreds only those files.
+*   **Surgical History Cleaning:** For shell history (`.bash_history`, etc.), it creates a sanitized copy, securely shreds the original tainted file, and restores the clean version to preserve your non-VPN history.
+*   **Interactive Recovery:** If a wipe fails (e.g., due to root ownership), the tool provides diagnostic logs and prompts for `sudo shred` escalation, ensuring no "false success" reports.
+
 ---
 
 ## 🕵️ Privacy & Logging
@@ -210,9 +218,10 @@ LazyVPN is designed with a "zero-knowledge" philosophy for your local machine. W
 * **Opt-In Debugging:** If you need to troubleshoot an issue, you can enable temporary logging in **Settings > Advanced > Debug Logging**.
   * **Granular Categories:** Enable logging for specific subsystems (Connection, Auto-recover, Firewall, Provider Parsing, or Autostart) to keep data collection minimal.
   * **Safe Mode (Default):** Debug logs automatically redact sensitive metadata, including WireGuard private keys and public IP addresses.
-* **Total Shredding:** Unlike standard tools that simply "delete" files, LazyVPN uses `shred -u` (overwrite and remove) for all logs and configuration files.
-  * **Verified Destruction:** Every file operation provides explicit feedback. If a secure wipe fails (e.g., due to permissions), the tool prompts you to escalate to `sudo shred` or force-remove, ensuring you are never under a false sense of security.
-* **Clean Uninstallation:** The uninstaller securely shreds all local logs, credentials, and cache. It also offers to surgically scrub VPN-related entries from your system journal and shell history.
+*   **Verified Secure Deletion:** Unlike standard tools that simply "delete" files, LazyVPN uses `shred -u` (overwrite and remove) for all logs and configuration files.
+  *   **Explicit Feedback:** Every file operation provides explicit feedback. If a secure wipe fails (e.g., due to permissions), the tool prompts you to escalate to `sudo shred` or force-remove, ensuring you are never under a false sense of security.
+*   **Clean Uninstallation:** The uninstaller securely shreds all local logs, credentials, and cache. It also performs a surgical scrub of VPN-related entries from your system journal and shell history (see Security Architecture for details).
+
 
 ---
 

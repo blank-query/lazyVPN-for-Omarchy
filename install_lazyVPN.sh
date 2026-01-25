@@ -240,8 +240,8 @@ cat > "$SUDOERS_TEMP" <<'SUDOERS_EOF'
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/sysctl.d/99-lazyvpn-ipv6.conf
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/shred -u /etc/sudoers.d/lazyvpn
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /etc/sudoers.d/lazyvpn
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/shred -u /var/log/journal/*/system*.journal
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /var/log/journal/*/system*.journal
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/shred -u /var/log/journal/*/*.journal*
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/rm -f /var/log/journal/*/*.journal*
 
 # Firewall management - iptables operations for LazyVPN killswitch
 # Restricted to LAZYVPN_OUT chain operations only
