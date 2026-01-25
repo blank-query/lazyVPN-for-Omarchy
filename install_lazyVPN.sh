@@ -534,4 +534,27 @@ echo "Keyboard Shortcuts:"
 echo "  - SUPER+L         Open LazyVPN menu"
 echo "  - SUPER+ALT+SPACE Omarchy menu → LazyVPN"
 echo ""
+
+# Offer to remove the git clone directory
+echo "───────────────────────────────────────────────────────────"
+echo "The installation source directory can now be removed:"
+echo "  $SCRIPT_DIR"
+echo ""
+read -r -p "Remove the git clone directory? [y/N]: " remove_repo
+if [[ "$remove_repo" =~ ^[Yy]$ ]]; then
+  echo ""
+  echo "Removing installation source..."
+  cd "$HOME"
+  # Collect all files for secure deletion
+  repo_files=()
+  while IFS= read -r f; do
+    repo_files+=("$f")
+  done < <(find "$SCRIPT_DIR" -type f 2>/dev/null)
+  secure_delete "${repo_files[@]}"
+  # Remove empty directories
+  find "$SCRIPT_DIR" -type d -empty -delete 2>/dev/null
+  rmdir "$SCRIPT_DIR" 2>/dev/null || rm -rf "$SCRIPT_DIR"
+  echo "✓ Removed: $SCRIPT_DIR"
+fi
+echo ""
 omarchy-show-done

@@ -486,9 +486,13 @@ secure_delete() {
     local failed_files=()
     local failed_errors=()
 
-    # Filter to only existing files
+    # Filter to only existing files (use sudo for existence check if --sudo specified)
     for f in "$@"; do
-        [[ -f "$f" ]] && files+=("$f")
+        if [[ "$use_sudo" == true ]]; then
+            sudo test -f "$f" 2>/dev/null && files+=("$f")
+        else
+            [[ -f "$f" ]] && files+=("$f")
+        fi
     done
 
     # No existing files = silent success
