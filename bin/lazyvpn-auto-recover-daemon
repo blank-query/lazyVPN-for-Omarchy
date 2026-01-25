@@ -39,44 +39,44 @@ load_config "$CONFIG_FILE"
 
 debug_log autorecover "Auto-recover daemon started (PID: $$)"
 
-# Main monitoring loop
-CONSECUTIVE_FAILURES=0
-MAX_FAILURES=3
-CHECK_INTERVAL=10  # seconds
+# Configuration
+CHECK_INTERVAL=5      # seconds between health checks
+MAX_HEALTH_FAILURES=3 # health check failures before reconnect attempt
+MAX_RETRIES=3         # reconnect attempts before giving up/failover
+
+# State variables
+STATE="MONITORING"    # MONITORING, RETRYING, FAILED
+HEALTH_FAILURES=0
+RETRY_COUNT=0
 
 while true; do
-  # Load config
+  # Load config each iteration (settings can change)
   load_config "$CONFIG_FILE"
 
-  # Check if auto-recover is enabled
+  # Check if auto-recover is still enabled
   if [[ "${AUTO_RECOVER:-false}" != "true" ]]; then
     debug_log autorecover "Auto-recover disabled in config. Stopping."
     exit 0
   fi
 
   CONN_NAME="${CONNECTION_NAME:-wg0}"
+  LAST_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2)
 
-  # Check if VPN is supposed to be connected
-  if ! is_connected "$CONN_NAME"; then
-    # Not connected, reset failure counter
-    CONSECUTIVE_FAILURES=0
-    sleep "$CHECK_INTERVAL"
-    continue
-  fi
-
-  # VPN is connected, check health
-  LAST_SERVER=$(grep "^LAST_CONNECTED_SERVER=" "$CONFIG_FILE" | cut -d= -f2)
-
+  # No server configured - nothing to do
   if [[ -z "$LAST_SERVER" ]]; then
-    debug_log autorecover "No last connected server found"
+    STATE="MONITORING"
+    HEALTH_FAILURES=0
+    RETRY_COUNT=0
     sleep "$CHECK_INTERVAL"
     continue
   fi
 
-  # Handle dynamic server format: "dynamic:provider:server_name"
+  # Parse server info (needed for reconnect)
   IS_DYNAMIC=false
-  ENDPOINT=""
+  PROVIDER=""
+  SERVER_NAME=""
   PRETTY_SERVER=""
+  ENDPOINT=""
 
   if [[ "$LAST_SERVER" =~ ^dynamic:([^:]+):(.+)$ ]]; then
     IS_DYNAMIC=true
@@ -97,54 +97,65 @@ while true; do
         PRETTY_SERVER+=" ($SERVER_NAME)"
       fi
     fi
-
-    if [[ -z "$ENDPOINT" ]]; then
-      debug_log autorecover "Could not find endpoint for dynamic server $SERVER_NAME"
-      sleep "$CHECK_INTERVAL"
-      continue
-    fi
   else
-    # Traditional config file server
+    SERVER_NAME="$LAST_SERVER"
     PRETTY_SERVER=$(get_pretty_server_name "$LAST_SERVER" "$SCRIPT_DIR")
 
-    # Get VPN gateway from config
     WG_DIR="$CONFIG_DIR/wireguard"
     VPN_CONFIG="$WG_DIR/${LAST_SERVER}.conf"
 
-    if [[ ! -f "$VPN_CONFIG" ]]; then
-      debug_log autorecover "Config not found for $LAST_SERVER"
-      sleep "$CHECK_INTERVAL"
-      continue
+    if [[ -f "$VPN_CONFIG" ]]; then
+      ENDPOINT=$(grep -m1 "^Endpoint" "$VPN_CONFIG" | cut -d= -f2 | tr -d ' ' | cut -d: -f1)
     fi
-
-    # Get endpoint IP
-    ENDPOINT=$(grep -m1 "^Endpoint" "$VPN_CONFIG" | cut -d= -f2 | tr -d ' ' | cut -d: -f1)
   fi
 
+  # Can't do anything without endpoint info
   if [[ -z "$ENDPOINT" ]]; then
     debug_log autorecover "Could not determine endpoint for $LAST_SERVER"
     sleep "$CHECK_INTERVAL"
     continue
   fi
 
-  # Ping VPN endpoint
-  if ping -c 2 -W 3 -I "$CONN_NAME" "$ENDPOINT" >/dev/null 2>&1; then
-    # Connection healthy
-    if [[ $CONSECUTIVE_FAILURES -gt 0 ]]; then
-      debug_log autorecover "Connection restored to $LAST_SERVER"
-      notify "VPN connection restored to $PRETTY_SERVER"
-    fi
-    CONSECUTIVE_FAILURES=0
-  else
-    # Connection unhealthy
-    ((CONSECUTIVE_FAILURES++))
-    debug_log autorecover "Health check failed for $LAST_SERVER (attempt $CONSECUTIVE_FAILURES/$MAX_FAILURES)"
+  # STATE MACHINE
+  case "$STATE" in
 
-    if [[ $CONSECUTIVE_FAILURES -ge $MAX_FAILURES ]]; then
-      debug_log autorecover "Connection to $LAST_SERVER failed. Attempting reconnect..."
-      notify "VPN connection lost!\nAttempting to reconnect to $PRETTY_SERVER..."
+    MONITORING)
+      if is_connected "$CONN_NAME"; then
+        # Connected - do health check
+        if ping -c 2 -W 3 -I "$CONN_NAME" "$ENDPOINT" >/dev/null 2>&1; then
+          # Healthy
+          if [[ $HEALTH_FAILURES -gt 0 ]]; then
+            debug_log autorecover "Connection restored to $LAST_SERVER"
+            notify "VPN connection restored to $PRETTY_SERVER"
+          fi
+          HEALTH_FAILURES=0
+        else
+          # Unhealthy
+          ((HEALTH_FAILURES++))
+          debug_log autorecover "Health check failed for $LAST_SERVER ($HEALTH_FAILURES/$MAX_HEALTH_FAILURES)"
 
-      # Attempt reconnect (handle both dynamic and traditional servers)
+          if [[ $HEALTH_FAILURES -ge $MAX_HEALTH_FAILURES ]]; then
+            debug_log autorecover "Connection to $LAST_SERVER failed. Switching to RETRYING state."
+            notify "VPN connection lost!\nAttempting to reconnect..."
+            STATE="RETRYING"
+            RETRY_COUNT=0
+          fi
+        fi
+      else
+        # Not connected but should be - go to retry state
+        debug_log autorecover "VPN disconnected unexpectedly. Switching to RETRYING state."
+        notify "VPN disconnected!\nAttempting to reconnect..."
+        STATE="RETRYING"
+        RETRY_COUNT=0
+        HEALTH_FAILURES=0
+      fi
+      ;;
+
+    RETRYING)
+      ((RETRY_COUNT++))
+      debug_log autorecover "Reconnect attempt $RETRY_COUNT/$MAX_RETRIES to $LAST_SERVER"
+
+      # Attempt reconnect
       RECONNECT_SUCCESS=false
       if [[ "$IS_DYNAMIC" == "true" ]]; then
         if "$SCRIPT_DIR/lazyvpn-connect-dynamic" "$PROVIDER" "$SERVER_NAME" >/dev/null 2>&1; then
@@ -158,41 +169,71 @@ while true; do
 
       if [[ "$RECONNECT_SUCCESS" == "true" ]]; then
         debug_log autorecover "Successfully reconnected to $LAST_SERVER"
-        notify "VPN reconnected successfully to $PRETTY_SERVER"
-        CONSECUTIVE_FAILURES=0
-      else
-        debug_log autorecover "Failed to reconnect to $LAST_SERVER"
-        notify "VPN connection failed!\nAttempting to reconnect to $PRETTY_SERVER..."
+        notify "VPN reconnected to $PRETTY_SERVER"
+        STATE="MONITORING"
+        HEALTH_FAILURES=0
+        RETRY_COUNT=0
+      elif [[ $RETRY_COUNT -ge $MAX_RETRIES ]]; then
+        # Exhausted retries
+        debug_log autorecover "Failed to reconnect after $MAX_RETRIES attempts"
 
-        # If auto-reconnect fails, check if user wants to try another server
         if [[ "${AUTO_FAILOVER:-false}" == "true" ]]; then
+          # Try another server
           debug_log autorecover "Attempting failover to alternate server..."
+          notify "Reconnect failed after $MAX_RETRIES attempts\nTrying alternate server..."
 
-          # Check if killswitch would block quickest (same logic as autoconnect)
+          FAILOVER_SUCCESS=false
           if [[ "$KILLSWITCH" == "true" ]] && ! is_connected "$CONN_NAME"; then
-            # Use random instead of quickest when killswitch blocks
-            debug_log autorecover "Killswitch active - using random server selection"
+            # Use random when killswitch blocks latency test
+            debug_log autorecover "Killswitch active - using random server"
             if "$SCRIPT_DIR/lazyvpn-random" >/dev/null 2>&1; then
-              debug_log autorecover "Failover successful (used random due to killswitch)"
-              notify "VPN failed over to random server"
-              CONSECUTIVE_FAILURES=0
-            else
-              debug_log autorecover "Failover failed"
+              FAILOVER_SUCCESS=true
+              debug_log autorecover "Failover to random server successful"
+              notify "VPN connected to random server"
             fi
           else
-            # Killswitch not blocking, can use quickest
             if "$SCRIPT_DIR/lazyvpn-quickest" >/dev/null 2>&1; then
-              debug_log autorecover "Failover successful"
-              notify "VPN failed over to alternate server"
-              CONSECUTIVE_FAILURES=0
-            else
-              debug_log autorecover "Failover failed"
+              FAILOVER_SUCCESS=true
+              debug_log autorecover "Failover to quickest server successful"
+              notify "VPN connected to quickest server"
             fi
           fi
+
+          if [[ "$FAILOVER_SUCCESS" == "true" ]]; then
+            STATE="MONITORING"
+            HEALTH_FAILURES=0
+            RETRY_COUNT=0
+          else
+            debug_log autorecover "Failover also failed - entering FAILED state"
+            notify "VPN failover failed\nManual reconnection required"
+            STATE="FAILED"
+          fi
+        else
+          # No failover - give up
+          debug_log autorecover "Auto-failover disabled - entering FAILED state"
+          notify "VPN reconnect failed\nPlease choose another server"
+
+          # Clear LAST_CONNECTED_SERVER so we don't keep trying
+          atomic_config_update "LAST_CONNECTED_SERVER" "" "$CONFIG_FILE"
+          STATE="FAILED"
         fi
+      else
+        # More retries left
+        notify "Reconnect attempt $RETRY_COUNT failed\nRetrying..."
       fi
-    fi
-  fi
+      ;;
+
+    FAILED)
+      # Wait for user to manually connect, then resume monitoring
+      if is_connected "$CONN_NAME"; then
+        debug_log autorecover "User reconnected manually. Resuming monitoring."
+        STATE="MONITORING"
+        HEALTH_FAILURES=0
+        RETRY_COUNT=0
+      fi
+      ;;
+
+  esac
 
   sleep "$CHECK_INTERVAL"
 done

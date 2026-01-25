@@ -125,6 +125,11 @@ info "Checking current public IP..."
 CURRENT_IP=$(curl -s --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
 if [[ -n "$CURRENT_IP" ]]; then
   info "Current IP: $CURRENT_IP"
+  # Store real IP for disconnect verification (helps detect phantom connections)
+  # Only store if we're not already connected to a VPN
+  if ! is_connected "$CONN_NAME"; then
+    atomic_config_update "REAL_PUBLIC_IP" "$CURRENT_IP" "$USER_CONFIG_FILE"
+  fi
 else
   info "Current IP: Unable to retrieve"
 fi
@@ -273,10 +278,13 @@ if [[ "$CONNECTION_FAILED" == "true" ]]; then
   echo "Error: Connection failed - $FAILURE_REASON"
   cleanup_failed_connection
 
-  echo ""
-  read -r -p "Retry connection? [Y/n] " retry_response
-  if [[ ! "$retry_response" =~ ^[Nn]$ ]]; then
-    exec "$0" "$PROVIDER" "$SERVER_NAME"
+  # Only prompt for retry if running interactively
+  if [[ -t 0 ]]; then
+    echo ""
+    read -r -p "Retry connection? [Y/n] " retry_response
+    if [[ ! "$retry_response" =~ ^[Nn]$ ]]; then
+      exec "$0" "$PROVIDER" "$SERVER_NAME"
+    fi
   fi
   exit 1
 fi

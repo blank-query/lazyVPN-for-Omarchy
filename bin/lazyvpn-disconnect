@@ -151,14 +151,24 @@ else
 
   AFTER_IP=$(curl -s --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null)
 
+  # Get stored real IP to detect phantom connections
+  REAL_PUBLIC_IP="${REAL_PUBLIC_IP:-}"
+
   if [[ -z "$AFTER_IP" ]]; then
     # Can't get IP when we should be able to
     DISCONNECT_FAILED=true
     FAILURE_REASON="Unable to retrieve public IP after disconnect"
   elif [[ "$AFTER_IP" == "$BEFORE_IP" ]]; then
-    # IP didn't change - still showing VPN IP
-    DISCONNECT_FAILED=true
-    FAILURE_REASON="Still showing VPN IP (IP unchanged: $AFTER_IP)"
+    # IP didn't change - but check if VPN was already dead (phantom connection)
+    if [[ -n "$REAL_PUBLIC_IP" ]] && [[ "$BEFORE_IP" == "$REAL_PUBLIC_IP" ]]; then
+      # The "VPN IP" was actually our real IP - VPN connection had already failed
+      info "Public IP: $AFTER_IP"
+      info "✓ VPN connection was already inactive - cleanup complete"
+    else
+      # IP didn't change and doesn't match stored real IP - still on VPN
+      DISCONNECT_FAILED=true
+      FAILURE_REASON="Still showing VPN IP (IP unchanged: $AFTER_IP)"
+    fi
   else
     # IP changed - successful disconnect
     info "Public IP: $AFTER_IP"
@@ -186,5 +196,11 @@ fi
 
 # All verification passed
 debug_log connection "Disconnection verified successfully"
+
+# Clear stored IPs for privacy
+atomic_config_update "REAL_PUBLIC_IP" "" "$CONFIG_FILE"
+atomic_config_update "LAST_PUBLIC_IP" "" "$CONFIG_FILE"
+atomic_config_update "LAST_CONNECTED_SERVER" "" "$CONFIG_FILE"
+
 echo ""
 info "Successfully disconnected"
