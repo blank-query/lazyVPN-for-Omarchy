@@ -75,13 +75,43 @@ fi
 
 # Check if LazyVPN is already installed
 if [[ -d "$LAZYVPN_BIN" ]] && [[ -n "$(find "$LAZYVPN_BIN" -name "lazyvpn-*" -print -quit 2>/dev/null)" ]]; then
-  echo "Error: LazyVPN is already installed"
+  echo "LazyVPN seems to already be installed!"
   echo ""
-  echo "To reinstall or upgrade:"
-  echo "  1. Run: lazyvpn-uninstall (from Omarchy menu or terminal)"
-  echo "  2. Then run this installer again"
+  echo "Choose one of the following options:"
+  echo "  1) Abort Install (Default)"
+  echo "  2) Uninstall"
+  echo "  3) Attempt Repair"
   echo ""
-  exit 1
+  read -r -p "Enter choice [1/2/3]: " install_choice
+
+  case "${install_choice:-1}" in
+    2)
+      echo ""
+      echo "Running uninstaller..."
+      if [[ -x "$LAZYVPN_BIN/lazyvpn-uninstall" ]]; then
+        bash "$LAZYVPN_BIN/lazyvpn-uninstall"
+      elif [[ -f "$SCRIPT_DIR/bin/lazyvpn-uninstall" ]]; then
+        echo "(Using uninstaller from repo - installed copy not found)"
+        bash "$SCRIPT_DIR/bin/lazyvpn-uninstall"
+      else
+        echo "Error: Could not find uninstaller"
+        exit 1
+      fi
+      echo ""
+      echo "Uninstall complete. Run the installer again to reinstall."
+      exit 0
+      ;;
+    3)
+      echo ""
+      echo "Attempting repair - reinstalling over existing files..."
+      # Fall through to continue installation
+      ;;
+    *)
+      echo ""
+      echo "Install aborted."
+      exit 0
+      ;;
+  esac
 fi
 
 # Check if systemd-networkd is available and enabled
