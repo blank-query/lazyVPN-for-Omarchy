@@ -239,8 +239,9 @@ if [[ -f "$HYPR_BINDINGS" ]]; then
   if grep -q "LazyVPN" "$HYPR_BINDINGS"; then
     # Remove the LazyVPN comment and keybinding lines
     sed -i '/# LazyVPN/d' "$HYPR_BINDINGS"
+    sed -i '/bindd = SUPER SHIFT, L, LazyVPN/d' "$HYPR_BINDINGS"
     sed -i '/bindd = SUPER, L, LazyVPN/d' "$HYPR_BINDINGS"
-    echo "  - Removed SUPER+L keybinding from Hyprland"
+    echo "  - Removed LazyVPN keybinding from Hyprland"
 
     # Reload Hyprland config
     hyprctl reload >/dev/null 2>&1
@@ -256,7 +257,7 @@ fi
 KEYBINDINGS_SCRIPT="$OMARCHY_BIN/omarchy-menu-keybindings"
 if [[ -f "$KEYBINDINGS_SCRIPT" ]]; then
   if grep -q "LazyVPN" "$KEYBINDINGS_SCRIPT"; then
-    sed -i '/echo "SUPER,L,LazyVPN,exec,lazyvpn-menu"/d' "$KEYBINDINGS_SCRIPT"
+    sed -i '/echo "SUPER.*L,LazyVPN,exec,lazyvpn-menu"/d' "$KEYBINDINGS_SCRIPT"
     echo "  - Removed from keybindings helper"
   else
     echo "  - No LazyVPN entry found in keybindings helper"

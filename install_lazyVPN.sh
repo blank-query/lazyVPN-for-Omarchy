@@ -427,18 +427,24 @@ else
 fi
 
 echo ""
-echo "Step 8: Adding keyboard shortcut (SUPER+L)..."
+echo "Step 8: Adding keyboard shortcut (SUPER+SHIFT+L)..."
 
 # Add keybinding to Hyprland config
 HYPR_BINDINGS="$HOME/.config/hypr/bindings.conf"
 if [[ -f "$HYPR_BINDINGS" ]]; then
-  if grep -q "LazyVPN" "$HYPR_BINDINGS"; then
+  # Migrate old SUPER, L binding to SUPER SHIFT, L
+  if grep -q "bindd = SUPER, L, LazyVPN" "$HYPR_BINDINGS"; then
+    sed -i "s|bindd = SUPER, L, LazyVPN.*|bindd = SUPER SHIFT, L, LazyVPN, exec, $LAZYVPN_BIN/lazyvpn-menu|" "$HYPR_BINDINGS"
+    echo "  ✓ Migrated SUPER+L → SUPER+SHIFT+L keybinding"
+    hyprctl reload >/dev/null 2>&1
+    echo "  ✓ Reloaded Hyprland configuration"
+  elif grep -q "LazyVPN" "$HYPR_BINDINGS"; then
     echo "  LazyVPN keybinding already exists in Hyprland config"
   else
     echo "" >> "$HYPR_BINDINGS"
     echo "# LazyVPN" >> "$HYPR_BINDINGS"
-    echo "bindd = SUPER, L, LazyVPN, exec, $LAZYVPN_BIN/lazyvpn-menu" >> "$HYPR_BINDINGS"
-    echo "  ✓ Added SUPER+L keybinding to Hyprland"
+    echo "bindd = SUPER SHIFT, L, LazyVPN, exec, $LAZYVPN_BIN/lazyvpn-menu" >> "$HYPR_BINDINGS"
+    echo "  ✓ Added SUPER+SHIFT+L keybinding to Hyprland"
 
     # Reload Hyprland config
     hyprctl reload >/dev/null 2>&1
@@ -455,7 +461,7 @@ if [[ -f "$KEYBINDINGS_SCRIPT" ]]; then
     echo "  LazyVPN already in keybindings helper"
   else
     # Add LazyVPN to static_bindings() function
-    sed -i "/static_bindings() {/a\\    echo \"SUPER,L,LazyVPN,exec,$LAZYVPN_BIN/lazyvpn-menu\"" "$KEYBINDINGS_SCRIPT"
+    sed -i "/static_bindings() {/a\\    echo \"SUPER SHIFT,L,LazyVPN,exec,$LAZYVPN_BIN/lazyvpn-menu\"" "$KEYBINDINGS_SCRIPT"
     echo "  ✓ Added to keybindings helper (SUPER+K)"
   fi
 else
@@ -544,7 +550,7 @@ echo "Getting Started (Choose ONE method):"
 echo ""
 echo "OPTION A - Dynamic Server List (Recommended):"
 echo "  1. Download ONE WireGuard config from your VPN provider"
-echo "  2. Open LazyVPN menu (SUPER+L or SUPER+ALT+SPACE → LazyVPN)"
+echo "  2. Open LazyVPN menu (SUPER+SHIFT+L or SUPER+ALT+SPACE → LazyVPN)"
 echo "  3. Go to Options → Setup Provider"
 echo "  4. Select your config file - LazyVPN extracts your credentials"
 echo "  5. Browse ALL servers without downloading individual configs!"
@@ -561,7 +567,7 @@ echo "  - IVPN: https://ivpn.net/account (WireGuard Config Generator)"
 echo "  - NordVPN, Surfshark, Windscribe, PIA, and more"
 echo ""
 echo "Keyboard Shortcuts:"
-echo "  - SUPER+L         Open LazyVPN menu"
+echo "  - SUPER+SHIFT+L   Open LazyVPN menu"
 echo "  - SUPER+ALT+SPACE Omarchy menu → LazyVPN"
 echo ""
 

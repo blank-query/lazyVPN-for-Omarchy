@@ -31,7 +31,7 @@ cd lazyVPN-for-Omarchy
 ./install_lazyVPN.sh
 ```
 
-🚀 **That's it!** Press `SUPER+L` to launch the menu.
+🚀 **That's it!** Press `SUPER+SHIFT+L` to launch the menu.
 
 1. Select **Dynamic Server List**.
 2. Load **one** WireGuard config from your provider to authenticate.
@@ -227,7 +227,7 @@ LazyVPN is designed with a "zero-knowledge" philosophy for your local machine. W
 
 ## Usage & Menu Structure
 
-**Open Menu**: `SUPER+L`
+**Open Menu**: `SUPER+SHIFT+L`
 **Navigate**: Arrow keys and Enter. Esc to go back.
 
 ### 🛡️ Protection & Automation
@@ -255,7 +255,7 @@ LazyVPN isn't just an app; it's part of your Omarchy desktop.
 
 * **Waybar Status:** A custom module appears automatically when connected, showing your provider, location flag, and IP. Click to open the menu.
 * **Omarchy Menu:** Fully integrated into the main system menu (`SUPER+ALT+SPACE`) with the native Omarchy visual style.
-* **Keybinding Helper:** Automatically registers `SUPER+L` in the Omarchy keybinding cheat sheet (`SUPER+K`).
+* **Keybinding Helper:** Automatically registers `SUPER+SHIFT+L` in the Omarchy keybinding cheat sheet (`SUPER+K`).
 * **Desktop Notifications:** Native notifications for connection status and auto-recovery events.
 
 ---
