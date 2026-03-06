@@ -197,8 +197,11 @@ if [[ -n "$DEFAULT_GW" ]] && [[ -n "$VPN_ENDPOINT_IP" ]]; then
   sudo ip route add "$VPN_ENDPOINT_IP/32" via "$DEFAULT_GW" dev "$DEFAULT_DEV" 2>/dev/null || true
 fi
 
-# Add default route through VPN interface with lower metric (preferred over existing default)
-sudo ip route add default dev "$CONN_NAME" metric 100 2>/dev/null || warn "Route configuration may need adjustment"
+# Route all traffic through VPN using the wg-quick split-route approach
+# 0.0.0.0/1 + 128.0.0.0/1 are more specific than any default route (0.0.0.0/0)
+# so they always take priority regardless of existing default route metrics
+sudo ip route add 0.0.0.0/1 dev "$CONN_NAME" 2>/dev/null || true
+sudo ip route add 128.0.0.0/1 dev "$CONN_NAME" 2>/dev/null || true
 debug_log connection "Routes configured: endpoint=$VPN_ENDPOINT_IP via $DEFAULT_GW dev $DEFAULT_DEV, default via $CONN_NAME metric 100"
 
 echo ""

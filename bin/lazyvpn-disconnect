@@ -54,14 +54,11 @@ if [ -f "$NETDEV_FILE" ] || [ -f "$NETWORK_FILE" ]; then
     }
 fi
 
-# Clean up routes (VPN endpoint host route might persist)
-# The default route through VPN will be removed when interface goes down
-# Get VPN endpoint from netdev file before removing it
-if ip route show | grep -q "via.*$CONN_NAME"; then
-    info "Cleaning up VPN routes..."
-    # Remove routes through VPN interface
-    sudo ip route del default dev "$CONN_NAME" 2>/dev/null || true
-fi
+# Clean up routes (VPN routes might persist after interface goes down)
+info "Cleaning up VPN routes..."
+sudo ip route del 0.0.0.0/1 dev "$CONN_NAME" 2>/dev/null || true
+sudo ip route del 128.0.0.0/1 dev "$CONN_NAME" 2>/dev/null || true
+sudo ip route del default dev "$CONN_NAME" 2>/dev/null || true
 
 # Restart systemd-networkd to apply changes
 info "Restarting systemd-networkd..."
