@@ -155,6 +155,11 @@ info "Generating WireGuard configuration..."
 # Endpoint can be hostname or IP with port
 ENDPOINT="${SERVER_IP}:${PORT}"
 
+# Capture default gateway BEFORE creating VPN interface
+# (systemd-networkd auto-creates routes from AllowedIPs that change the routing table)
+DEFAULT_GW=$(ip route show default | awk '/via/{for(i=1;i<=NF;i++)if($i=="via"){print $(i+1);exit}}')
+DEFAULT_DEV=$(ip route show default | awk '/via/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')
+
 # AllowedIPs - route all traffic through VPN
 ALLOWED_IPS="0.0.0.0/0,::/0"
 
@@ -175,21 +180,25 @@ PublicKey=$PUBLIC_KEY
 AllowedIPs=$ALLOWED_IPS
 Endpoint=$ENDPOINT
 PersistentKeepalive=25
+RouteTable=off
 EOF
 
 # Create the .network file
 info "Creating network file..."
 
-cat << EOF | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-network "$CONN_NAME"
-[Match]
-Name=$CONN_NAME
+# Handle comma-separated addresses (e.g., Mullvad: "10.68.x.x/32, fc00::.../128")
+ADDR_LINES=$(echo "$ADDRESS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | sed 's/^/Address=/')
 
-[Network]
-Address=$ADDRESS
-DNS=$DNS
-DNSDefaultRoute=true
-Domains=~.
-EOF
+{
+  echo "[Match]"
+  echo "Name=$CONN_NAME"
+  echo ""
+  echo "[Network]"
+  echo "$ADDR_LINES"
+  echo "DNS=$DNS"
+  echo "DNSDefaultRoute=true"
+  echo "Domains=~."
+} | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-network "$CONN_NAME"
 
 # Restart systemd-networkd
 info "Restarting systemd-networkd..."
@@ -208,10 +217,6 @@ sleep 2
 
 # Configure routes
 info "Configuring routes..."
-
-# Get current default gateway
-DEFAULT_GW=$(ip route show default | awk '/default/ {print $3}' | head -n1)
-DEFAULT_DEV=$(ip route show default | awk '/default/ {print $5}' | head -n1)
 
 if [[ -n "$DEFAULT_GW" ]] && [[ -n "$SERVER_IP" ]]; then
   # Add specific route to VPN endpoint through original gateway

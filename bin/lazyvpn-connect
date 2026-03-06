@@ -129,6 +129,12 @@ if [[ "${KILLSWITCH:-false}" == "true" ]]; then
   echo ""
 fi
 
+# Capture routing info BEFORE creating VPN interface
+# (systemd-networkd auto-creates routes from AllowedIPs that change the routing table)
+VPN_ENDPOINT_IP=$(echo "$ENDPOINT" | cut -d: -f1)
+DEFAULT_GW=$(ip route show default | awk '/via/{for(i=1;i<=NF;i++)if($i=="via"){print $(i+1);exit}}')
+DEFAULT_DEV=$(ip route show default | awk '/via/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')
+
 # Create the .netdev file using secure file helper
 info "Creating netdev file..."
 
@@ -146,21 +152,25 @@ PublicKey=$PUBLIC_KEY
 AllowedIPs=$ALLOWED_IPS
 Endpoint=$ENDPOINT
 PersistentKeepalive=$PERSISTENT_KEEPALIVE
+RouteTable=off
 EOF
 
 # Create the .network file using secure file helper
 info "Creating network file..."
 
-cat << EOF | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-network "$CONN_NAME"
-[Match]
-Name=$CONN_NAME
+# Handle comma-separated addresses (e.g., Mullvad: "10.68.x.x/32, fc00::.../128")
+ADDR_LINES=$(echo "$ADDRESS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | sed 's/^/Address=/')
 
-[Network]
-Address=$ADDRESS
-DNS=$DNS
-DNSDefaultRoute=true
-Domains=~.
-EOF
+{
+  echo "[Match]"
+  echo "Name=$CONN_NAME"
+  echo ""
+  echo "[Network]"
+  echo "$ADDR_LINES"
+  echo "DNS=$DNS"
+  echo "DNSDefaultRoute=true"
+  echo "Domains=~."
+} | sudo "$SCRIPT_DIR/lazyvpn-file-helper" write-network "$CONN_NAME"
 
 # Restart systemd-networkd to apply changes
 info "Restarting systemd-networkd..."
@@ -181,13 +191,6 @@ sleep 2
 
 # Add routes to send all traffic through VPN (based on AllowedIPs)
 info "Configuring routes..."
-
-# Get VPN endpoint IP to preserve connectivity to it
-VPN_ENDPOINT_IP=$(echo "$ENDPOINT" | cut -d: -f1)
-
-# Get current default gateway to preserve route to VPN endpoint
-DEFAULT_GW=$(ip route show default | awk '/default/ {print $3}' | head -n1)
-DEFAULT_DEV=$(ip route show default | awk '/default/ {print $5}' | head -n1)
 
 if [[ -n "$DEFAULT_GW" ]] && [[ -n "$VPN_ENDPOINT_IP" ]]; then
   # Add specific route to VPN endpoint through original gateway
