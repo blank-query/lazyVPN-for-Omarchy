@@ -57,7 +57,7 @@ save_provider_credentials() {
 
   local creds_file="$PROVIDERS_DIR/${provider}.conf"
 
-  # Create credentials file
+  # Create credentials file (values must be quoted to handle commas/spaces in ADDRESS)
   cat > "$creds_file" << EOF
 # LazyVPN Provider Credentials
 # Provider: ${PROVIDER_DISPLAY[$provider]}
@@ -66,10 +66,10 @@ save_provider_credentials() {
 # WARNING: This file contains your VPN private key.
 # Keep it secure and do not share it.
 
-PROVIDER=$provider
-PROVIDER_NAME=${PROVIDER_DISPLAY[$provider]}
-PRIVATE_KEY=$private_key
-ADDRESS=$address
+PROVIDER="$provider"
+PROVIDER_NAME="${PROVIDER_DISPLAY[$provider]}"
+PRIVATE_KEY="$private_key"
+ADDRESS="$address"
 EOF
 
   # Secure permissions (owner read-only)

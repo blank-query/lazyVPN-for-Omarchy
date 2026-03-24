@@ -37,8 +37,13 @@ if [[ ! -f "$PROVIDERS_DIR/${PROVIDER}.conf" ]]; then
   error "Provider not configured: $PROVIDER. Run lazyvpn-provider-setup first."
 fi
 
-# Load provider credentials
-source "$PROVIDERS_DIR/${PROVIDER}.conf" || error "Failed to load provider credentials"
+# Load provider credentials (parse safely — don't source, since ADDRESS may contain commas/spaces)
+_parse_provider_value() {
+  grep -m1 "^${1}=" "$2" | sed 's/^[^=]*=//' | sed 's/^"//;s/"$//' | sed 's/^'\''//;s/'\''$//' | tr -d '\r'
+}
+PROVIDER_NAME=$(_parse_provider_value "PROVIDER_NAME" "$PROVIDERS_DIR/${PROVIDER}.conf")
+PRIVATE_KEY=$(_parse_provider_value "PRIVATE_KEY" "$PROVIDERS_DIR/${PROVIDER}.conf")
+ADDRESS=$(_parse_provider_value "ADDRESS" "$PROVIDERS_DIR/${PROVIDER}.conf")
 
 if [[ -z "$PRIVATE_KEY" ]]; then
   error "No private key found in provider credentials"
