@@ -1,0 +1,69 @@
+name: update-servers
+
+# Weekly refresh of the per-provider WireGuard server snapshots on the
+# `server-data` branch. Pulls from gluetun-servers, WireGuard-filters, and
+# commits only when something changed. The LazyVPN binary fetches from
+# server-data (not from gluetun directly), so this job is the single point
+# that tracks upstream — if gluetun moves the data again, only this workflow
+# breaks, and released binaries keep working off the last good snapshot.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch: {} # manual "Run workflow" button
+
+permissions:
+  contents: write
+
+# Keep this list in sync with GluetunProviderMap in internal/provider/gluetun.go.
+env:
+  PROVIDERS: "protonvpn mullvad ivpn airvpn nordvpn surfshark windscribe fastestvpn"
+  UPSTREAM: "https://raw.githubusercontent.com/qdm12/gluetun-servers/main/pkg/servers"
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout server-data branch
+        uses: actions/checkout@v4
+        with:
+          ref: server-data
+
+      - name: Refresh provider snapshots
+        run: |
+          set -euo pipefail
+          for p in $PROVIDERS; do
+            tmp="$(mktemp)"
+            if ! curl -sf --max-time 60 "$UPSTREAM/$p.json" -o "$tmp"; then
+              echo "WARN: fetch failed for $p — keeping existing snapshot"
+              rm -f "$tmp"; continue
+            fi
+            if ! jq -e '.servers' "$tmp" >/dev/null 2>&1; then
+              echo "WARN: $p returned invalid JSON — keeping existing snapshot"
+              rm -f "$tmp"; continue
+            fi
+            filtered="$(mktemp)"
+            jq -c '{version, servers: [.servers[] | select(.vpn == "wireguard")]}' "$tmp" > "$filtered"
+            count="$(jq '.servers | length' "$filtered")"
+            if [ "$count" -gt 0 ]; then
+              mv "$filtered" "$p.json"
+              echo "OK: $p — $count WireGuard servers"
+            else
+              echo "WARN: $p produced 0 WireGuard servers — keeping existing snapshot"
+              rm -f "$filtered"
+            fi
+            rm -f "$tmp"
+          done
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes — server data is already current."
+          else
+            git commit -m "server data: weekly refresh ($(date -u +%Y-%m-%d))"
+            git push
+          fi

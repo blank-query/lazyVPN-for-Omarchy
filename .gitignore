@@ -1,0 +1,12 @@
+# Compiled binary
+/lazyvpn
+
+# Test and coverage output
+*.test
+coverage.out
+
+# Local backups
+backup/
+
+# Internal testing notes — not for the public repo
+MANUAL_TESTING.md
