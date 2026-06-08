@@ -71,12 +71,13 @@ declare -A PROVIDER_PORT=(
     [windscribe]="443"
 )
 
-# Gluetun provider name mappings (gluetun uses different identifiers)
+# Gluetun provider name mappings (gluetun uses different identifiers).
+# PIA is intentionally omitted: it has 0 WireGuard servers in gluetun
+# (OpenVPN-only) and no downloadable .conf, so it can't work with lazyVPN.
 declare -A GLUETUN_PROVIDER_MAP=(
     [protonvpn]="protonvpn"
     [mullvad]="mullvad"
     [ivpn]="ivpn"
-    [pia]="private internet access"
     [nordvpn]="nordvpn"
     [surfshark]="surfshark"
     [windscribe]="windscribe"
