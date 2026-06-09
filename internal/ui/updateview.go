@@ -170,14 +170,15 @@ func (m *UpdateView) View() string {
 		return b.String()
 	}
 
-	// Buttons
+	// Buttons. Labelled "Install" (not "Update") to match the Settings
+	// 2-state action wording — this dialog is the install confirmation.
 	var cancelBtn, updateBtn string
 	if m.selected == 0 {
 		cancelBtn = SelectedStyle.Render("[ Cancel ]")
-		updateBtn = MutedStyle.Render("[ Update ]")
+		updateBtn = MutedStyle.Render("[ Install ]")
 	} else {
 		cancelBtn = MutedStyle.Render("[ Cancel ]")
-		updateBtn = accentStyle().Render("[ Update ]")
+		updateBtn = accentStyle().Render("[ Install ]")
 	}
 
 	b.WriteString("  " + cancelBtn + "    " + updateBtn + "\n\n")

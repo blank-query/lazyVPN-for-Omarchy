@@ -65,7 +65,8 @@ func maybeRestoreUFW() {
 		return // we didn't enable it
 	}
 	if hasRulesWithTag(TagKillswitch) || hasRulesWithTag(TagLANBlock) ||
-		hasRulesWithTag(TagStealth) || hasRulesWithTag(TagIPv6) {
+		hasRulesWithTag(TagStealth) || hasRulesWithTag(TagLANAllow) ||
+		hasRulesWithTag(TagIPv6) {
 		return // another feature still needs UFW active
 	}
 	if _, err := runUFW.Run("disable"); err != nil {
@@ -105,16 +106,17 @@ func log(format string, args ...interface{}) {
 
 // KillswitchConfig holds configuration for killswitch rules.
 //
-// LAN handling maps to the three Local Network modes:
-//   - Allow:   AllowLocalNetwork=true,  AllowLANInbound=true   (LAN in + out)
-//   - Stealth: AllowLocalNetwork=true,  AllowLANInbound=false  (LAN out only)
-//   - Block:   AllowLocalNetwork=false, AllowLANInbound=false  (neither)
+// The killswitch owns leak prevention ONLY — it forces outbound through the
+// tunnel and rejects anything else leaving the physical interface. It does
+// NOT touch LAN/private-CIDR traffic: the Local Network layer (Allow/Stealth/
+// Block, tags la/st/lb) owns those rules independently and always, whether or
+// not the killswitch is engaged. The LAN layer's allow-out rules carry lower
+// UFW rule numbers than the killswitch's physical-interface reject, so LAN
+// traffic survives the killswitch by first-match ordering.
 type KillswitchConfig struct {
-	InterfaceName     string
-	DNS               string
-	Endpoint          string
-	AllowLocalNetwork bool // allow OUTBOUND traffic to private LAN ranges
-	AllowLANInbound   bool // allow INBOUND traffic from private LAN ranges
+	InterfaceName string
+	DNS           string
+	Endpoint      string
 }
 
 // ufwMu protects all UFW operations to prevent concurrent modifications
@@ -125,6 +127,7 @@ const (
 	TagKillswitch = "lazyvpn:ks"
 	TagLANBlock   = "lazyvpn:lb"
 	TagStealth    = "lazyvpn:st"
+	TagLANAllow   = "lazyvpn:la"
 	TagIPv6       = "lazyvpn:v6"
 )
 
@@ -149,7 +152,7 @@ func Enable(cfg *KillswitchConfig) error {
 
 // enableLocked implements Enable; caller must hold ufwMu.
 func enableLocked(cfg *KillswitchConfig) error {
-	log("Enabling killswitch (interface=%s, endpoint=%s, local=%v)", cfg.InterfaceName, cfg.Endpoint, cfg.AllowLocalNetwork)
+	log("Enabling killswitch (interface=%s, endpoint=%s)", cfg.InterfaceName, cfg.Endpoint)
 
 	// Save previous default policy for rollback
 	prevPolicy := getDefaultOutgoingPolicy()
@@ -248,33 +251,12 @@ func enableLocked(cfg *KillswitchConfig) error {
 		}
 	}
 
-	// Outbound to LAN: allowed in Allow AND Stealth modes.
-	if cfg.AllowLocalNetwork {
-		for _, cidr := range privateCIDRsV4 {
-			if err := addRule("allow", "out", "to", cidr, "comment", TagKillswitch); err != nil {
-				return err
-			}
-		}
-		for _, cidr := range privateCIDRsV6 {
-			if err := addRule("allow", "out", "to", cidr, "comment", TagKillswitch); err != nil {
-				return err
-			}
-		}
-	}
-	// Inbound from LAN: allowed ONLY in Allow mode. Stealth deliberately omits
-	// this (LAN can't reach in); Block omits both.
-	if cfg.AllowLANInbound {
-		for _, cidr := range privateCIDRsV4 {
-			if err := addRule("allow", "in", "from", cidr, "comment", TagKillswitch); err != nil {
-				return err
-			}
-		}
-		for _, cidr := range privateCIDRsV6 {
-			if err := addRule("allow", "in", "from", cidr, "comment", TagKillswitch); err != nil {
-				return err
-			}
-		}
-	}
+	// NOTE: LAN/private-CIDR rules are deliberately NOT emitted here. The Local
+	// Network layer (EnableLANAllow/EnableLANStealth/EnableLANBlock, tags
+	// la/st/lb) owns them as a standing constant. Those rules are added before
+	// the killswitch (at install, or re-applied before the killswitch on a mode
+	// change) so their lower UFW rule numbers beat the physical-interface reject
+	// below — LAN traffic survives the killswitch by first-match ordering.
 
 	// Allow all traffic on the VPN interface (both directions — this is the tunnel)
 	if cfg.InterfaceName != "" {
@@ -398,26 +380,12 @@ func EnableSimple() error {
 	}
 
 	// No VPN is connected, so there's no tunnel to allow — everything except
-	// loopback and the local network is blocked. Allow LAN both directions by
-	// default so this doesn't sever SSH / LAN access while disconnected. (The
-	// separate LAN Block/Stealth layer adds its own denials when the user wants
-	// LAN locked down.)
-	for _, cidr := range privateCIDRsV4 {
-		if err := addRule("allow", "out", "to", cidr, "comment", TagKillswitch); err != nil {
-			return err
-		}
-		if err := addRule("allow", "in", "from", cidr, "comment", TagKillswitch); err != nil {
-			return err
-		}
-	}
-	for _, cidr := range privateCIDRsV6 {
-		if err := addRule("allow", "out", "to", cidr, "comment", TagKillswitch); err != nil {
-			return err
-		}
-		if err := addRule("allow", "in", "from", cidr, "comment", TagKillswitch); err != nil {
-			return err
-		}
-	}
+	// loopback (and whatever the Local Network layer permits) is blocked. LAN
+	// access is NOT handled here: the standing Local Network layer (tags
+	// la/st/lb) owns it, and its allow-out rules carry lower UFW rule numbers
+	// than this default-deny, so LAN survives by first-match. Simple mode adds
+	// no physical-interface reject (there's no tunnel to prevent leaks around),
+	// so the default-deny is the only thing the LAN allow rules must beat.
 
 	// Activate UFW, then deny BOTH directions by default.
 	if err := ensureUFWEnabled(); err != nil {
@@ -690,6 +658,22 @@ func EnableLANStealth() error {
 		return err
 	}
 
+	// Allow OUTBOUND to private ranges — an explicit, inspectable rule so the
+	// "outbound LAN works" promise doesn't silently rely on UFW's default
+	// outgoing policy. It also carries a lower rule number than the killswitch's
+	// physical-interface reject, so LAN egress survives when the killswitch is
+	// engaged (first-match).
+	for _, cidr := range privateCIDRsV4 {
+		if err := addRule("allow", "out", "to", cidr, "comment", TagStealth); err != nil {
+			return err
+		}
+	}
+	for _, cidr := range privateCIDRsV6 {
+		if err := addRule("allow", "out", "to", cidr, "comment", TagStealth); err != nil {
+			return err
+		}
+	}
+
 	// Deny inbound from private IPv4 ranges on physical interface
 	for _, cidr := range privateCIDRsV4 {
 		if err := addRule("deny", "in", "on", physIface, "from", cidr, "comment", TagStealth); err != nil {
@@ -876,6 +860,99 @@ func IsLANBlockActive() bool {
 }
 
 // ---------------------------------------------------------------------------
+// LAN Allow Mode — full LAN access (inbound + outbound to private ranges)
+// ---------------------------------------------------------------------------
+
+// EnableLANAllow grants full local-network access: explicit allow rules for
+// inbound from and outbound to private ranges. These are EXPLICIT (not a
+// reliance on UFW's default policy) so the displayed "Allow: full LAN access"
+// matches inspectable reality — and so inbound LAN works even on systems whose
+// base incoming policy is deny (e.g. Omarchy's default). The allow-out rules
+// also carry lower rule numbers than the killswitch's physical-interface
+// reject, so LAN egress survives when the killswitch is engaged.
+func EnableLANAllow() error {
+	ufwMu.Lock()
+	defer ufwMu.Unlock()
+
+	log("Enabling LAN allow mode")
+
+	physIface, _, _ := GetPhysicalInterface()
+	if physIface == "" {
+		return fmt.Errorf("no physical interface found")
+	}
+
+	// Clean existing allow rules
+	if err := deleteRulesByTag(TagLANAllow); err != nil {
+		log("Warning: failed to clean existing LAN allow rules: %v", err)
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			log("LAN allow enable failed, rolling back")
+			deleteRulesByTag(TagLANAllow)
+			maybeRestoreUFW()
+		}
+	}()
+
+	// LAN allow rules only enforce when UFW is active.
+	if err := ensureUFWEnabled(); err != nil {
+		return err
+	}
+
+	// Allow OUTBOUND to private ranges (dest-based, survives killswitch reject).
+	for _, cidr := range privateCIDRsV4 {
+		if err := addRule("allow", "out", "to", cidr, "comment", TagLANAllow); err != nil {
+			return err
+		}
+	}
+	for _, cidr := range privateCIDRsV6 {
+		if err := addRule("allow", "out", "to", cidr, "comment", TagLANAllow); err != nil {
+			return err
+		}
+	}
+
+	// Allow INBOUND from private ranges on the physical interface. Scoped to
+	// physIface so it grants LAN access without opening the VPN tunnel
+	// interface (whose internal addresses are also private IPs).
+	for _, cidr := range privateCIDRsV4 {
+		if err := addRule("allow", "in", "on", physIface, "from", cidr, "comment", TagLANAllow); err != nil {
+			return err
+		}
+	}
+	for _, cidr := range privateCIDRsV6 {
+		if err := addRule("allow", "in", "on", physIface, "from", cidr, "comment", TagLANAllow); err != nil {
+			return err
+		}
+	}
+
+	success = true
+	log("LAN allow mode enabled (interface=%s)", physIface)
+	return nil
+}
+
+// DisableLANAllow removes LAN allow rules.
+func DisableLANAllow() error {
+	ufwMu.Lock()
+	defer ufwMu.Unlock()
+
+	log("Disabling LAN allow mode")
+
+	if err := deleteRulesByTag(TagLANAllow); err != nil {
+		return err
+	}
+	maybeRestoreUFW()
+
+	log("LAN allow mode disabled")
+	return nil
+}
+
+// IsLANAllowActive checks if explicit LAN allow rules are in place.
+func IsLANAllowActive() bool {
+	return hasRulesWithTag(TagLANAllow)
+}
+
+// ---------------------------------------------------------------------------
 // Teardown — full cleanup for uninstall
 // ---------------------------------------------------------------------------
 
@@ -895,7 +972,7 @@ func Teardown() error {
 	addRule("default", "allow", "outgoing")
 
 	// Delete all tagged rules
-	for _, tag := range []string{TagKillswitch, TagLANBlock, TagStealth, TagIPv6} {
+	for _, tag := range []string{TagKillswitch, TagLANBlock, TagStealth, TagLANAllow, TagIPv6} {
 		if err := deleteRulesByTag(tag); err != nil {
 			log("Warning: failed to delete rules with tag %s: %v", tag, err)
 		}

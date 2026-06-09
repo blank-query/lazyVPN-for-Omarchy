@@ -932,6 +932,38 @@ func TestSettingsManualUpdateCheck(t *testing.T) {
 		if desc := s.CurrentDescription(); !strings.Contains(desc, "9.9.9") {
 			t.Errorf("after result, CurrentDescription should show the new version; got %q", desc)
 		}
+
+		// 2-state: the action flips to "Install update X.X.X".
+		if s.updateRelease == nil || s.updateRelease.TagName != "9.9.9" {
+			t.Fatalf("updateRelease should be set to 9.9.9 after a successful check, got %+v", s.updateRelease)
+		}
+		var flipped bool
+		for _, it := range s.items {
+			if it.id == "check-updates" {
+				flipped = true
+				if !strings.Contains(it.name, "Install update 9.9.9") {
+					t.Errorf("action label should flip to Install; got %q", it.name)
+				}
+			}
+		}
+		if !flipped {
+			t.Fatal("check-updates item missing after rebuild")
+		}
+
+		// Selecting it again now installs (RunUpdateMsg), not re-checks.
+		s.activeCol = 0
+		s.setActiveCursor(i)
+		_, cmd2 := s.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if cmd2 == nil {
+			t.Fatal("install action should return a cmd")
+		}
+		run, ok := cmd2().(RunUpdateMsg)
+		if !ok {
+			t.Fatalf("expected RunUpdateMsg from install action, got %T", cmd2())
+		}
+		if run.Release == nil || run.Release.TagName != "9.9.9" {
+			t.Errorf("RunUpdateMsg should carry release 9.9.9, got %+v", run.Release)
+		}
 		return
 	}
 	t.Fatal("check-updates item not found in Automation (left) column")

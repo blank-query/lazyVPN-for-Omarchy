@@ -782,7 +782,23 @@ func (d *Dashboard) handleLocalNetworkCycle() (tea.Model, tea.Cmd) {
 		d.lanBlock, d.stealthMode = prevLanBlock, prevStealth
 	}
 
+	// Allow is now an explicit rule set (tag la), not the absence of rules —
+	// so transitions into/out of Allow toggle it like the other two modes.
+	prevAllow := !prevLanBlock && !prevStealth
+	newAllow := !newLanBlock && !newStealth
+
 	doOp := func() error {
+		// LAN allow rules (explicit full-access mode)
+		if newAllow && !prevAllow {
+			if err := firewallEnableLANAllow(); err != nil {
+				return err
+			}
+		} else if !newAllow && prevAllow {
+			if err := firewallDisableLANAllow(); err != nil {
+				return err
+			}
+		}
+
 		// Stealth rules
 		if newStealth && !prevStealth {
 			if err := firewallEnableLANStealth(); err != nil {
@@ -805,13 +821,20 @@ func (d *Dashboard) handleLocalNetworkCycle() (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Reapply killswitch when active (AllowLocalNetwork flag depends on LAN block).
-		// Skip when no server has been connected yet — we're in EnableSimple state
-		// (no DNS/endpoint allow rules), and calling Enable here with the empty
-		// ksCfg would replace the simple killswitch with a "full" one missing
-		// DNS allow rules, breaking system-wide DNS resolution. Use the captured
-		// lastConnServer (snapshotted at dispatch time, alongside ksCfg) so the
-		// guard and the config are evaluated against the same point-in-time state.
+		// Re-apply the killswitch when active so its physical-interface reject
+		// is re-appended AFTER the LAN rules we just changed. The new LAN
+		// allow-out rules land at higher UFW rule numbers than the old reject;
+		// re-emitting the killswitch deletes that reject and re-adds it last, so
+		// LAN egress (lower-numbered) wins by first-match again. Without this,
+		// switching modes while the killswitch is on would let the stale reject
+		// shadow the fresh LAN rules.
+		// Skip when no server has been connected yet — we're in EnableSimple
+		// state (no DNS/endpoint allow rules, and no reject to reorder), and
+		// calling Enable here with the empty ksCfg would replace the simple
+		// killswitch with a "full" one missing DNS allow rules, breaking
+		// system-wide DNS resolution. Use the captured lastConnServer
+		// (snapshotted at dispatch time, alongside ksCfg) so the guard and the
+		// config are evaluated against the same point-in-time state.
 		if ksActive && lastConnServer != "" {
 			if err := firewallEnable(ksCfg); err != nil {
 				return err
@@ -828,13 +851,11 @@ func (d *Dashboard) handleLocalNetworkCycle() (tea.Model, tea.Cmd) {
 }
 
 // buildKillswitchConfig creates a KillswitchConfig from the current state.
-// AllowLocalNetwork is derived from the cached LAN block flag — if LAN block
-// is active, we don't want the killswitch separately allowing private CIDRs.
+// The killswitch owns leak prevention only; LAN handling lives entirely in the
+// independent Local Network layer (la/st/lb tags), so no LAN flags here.
 func (d *Dashboard) buildKillswitchConfig() *firewall.KillswitchConfig {
 	ksCfg := &firewall.KillswitchConfig{
-		InterfaceName:     d.cfg.ConnectionName,
-		AllowLocalNetwork: !d.lanBlock,                   // Allow + Stealth: LAN outbound
-		AllowLANInbound:   !d.lanBlock && !d.stealthMode, // Allow only: LAN inbound
+		InterfaceName: d.cfg.ConnectionName,
 	}
 	lastServer := d.cfg.LastConnectedServer
 	if strings.HasPrefix(lastServer, "dynamic:") {

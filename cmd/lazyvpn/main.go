@@ -935,6 +935,36 @@ func runInstall() {
 		fmt.Println("  - IPv6 left enabled. Killswitch will still block v6 leaks for v4-only VPNs.")
 	}
 
+	// Step 4c: Local Network mode. This is a standing posture, independent of
+	// the killswitch — it's always in effect once set. Default to Stealth, which
+	// matches a typical desktop firewall (and Omarchy's own default): you can
+	// reach LAN devices outbound, but nothing on the network can initiate a
+	// connection back to you. Shown explicitly so the rules aren't a surprise.
+	fmt.Println()
+	fmt.Println("Set Local Network mode to Stealth?")
+	fmt.Println("  Stealth = outbound LAN works (printers, casting, a coffee-shop jukebox),")
+	fmt.Println("  but inbound connections from the network are blocked. This adds explicit")
+	fmt.Println("  UFW rules per private range:")
+	fmt.Println("    • allow out to 192.168/16, 10/8, 172.16/12, 169.254/16, fe80::/10, fc00::/7")
+	fmt.Println("    • deny  in  from those same ranges on your physical interface")
+	fmt.Println("  It is separate from the killswitch and toggleable later (Allow / Stealth /")
+	fmt.Println("  Block) from the TUI dashboard.")
+	fmt.Print("Enable Stealth as the default Local Network mode? [Y/n] ")
+	var lanChoice string
+	fmt.Scanln(&lanChoice)
+	if lanChoice != "n" && lanChoice != "N" {
+		if err := firewall.EnableLANStealth(); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ Failed to set Stealth mode: %v\n", err)
+			fmt.Fprintln(os.Stderr, "     (If you skipped passwordless sudo above, set this from the")
+			fmt.Fprintln(os.Stderr, "      TUI dashboard once sudo is configured — Local Network toggle.)")
+		} else {
+			fmt.Println("  ✓ Local Network: Stealth (outbound LAN allowed, inbound blocked)")
+		}
+	} else {
+		fmt.Println("  - Skipped. Local Network defaults to Allow (full LAN access) until you")
+		fmt.Println("    change it from the TUI dashboard.")
+	}
+
 	// Step 4b: Create autostart desktop file if autoconnect is enabled
 	if cfg.Autostart {
 		autostartDir := filepath.Join(homeDir, ".config", "autostart")

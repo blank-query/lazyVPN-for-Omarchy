@@ -2,6 +2,32 @@
 
 All notable changes to LazyVPN are documented here.
 
+## 1.0.2
+
+### Local Network and killswitch are now fully independent layers
+- **Local Network mode is a standing constant**, in effect whether or not the
+  killswitch is engaged. All three modes now lay down **explicit, inspectable**
+  UFW rules per private range (no more relying on the base policy):
+  - **Allow** — allow inbound + outbound to private ranges (genuine full LAN
+    access, even on a deny-incoming base like Omarchy's default)
+  - **Stealth** — allow outbound, deny inbound (coffee-shop mode)
+  - **Block** — deny inbound + outbound
+- **Stealth is now the default**, established as a visible, consented step
+  during `install` — it matches a typical desktop firewall (and Omarchy's own
+  default): reach out to LAN devices, but nothing on the network can reach in.
+- **The killswitch no longer touches LAN traffic at all** — it owns leak
+  prevention only (force outbound through the tunnel, reject everything else off
+  the physical interface). LAN egress survives the killswitch by UFW first-match
+  ordering: the Local Network allow-out rules carry lower rule numbers than the
+  killswitch's reject. Changing LAN mode while the killswitch is on re-applies
+  the killswitch so its reject stays last.
+
+### State-aware update action
+- The Settings **update control is now 2-state**: it reads "Check for Updates
+  Now" until a check finds a newer release, then becomes "Install update
+  X.X.X" — selecting it installs. The nav-banner confirm dialog now labels its
+  button "Install" to match.
+
 ## 1.0.1
 
 - Fix the **Check for Updates Now** action: the result (up to date / update available / error) now displays in the footer instead of getting stuck on "Checking…".

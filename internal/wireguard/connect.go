@@ -120,7 +120,6 @@ var (
 	getPhysicalInterface          = firewall.GetPhysicalInterface
 	firewallEnableLANBlock        = firewall.EnableLANBlock // func(vpnInterface, endpoint, gateway, dns string) error
 	firewallIsLANBlockActive      = firewall.IsLANBlockActive
-	firewallIsLANStealthActive    = firewall.IsLANStealthActive
 	firewallIsIPv6Disabled        = firewall.IsIPv6Disabled
 	captureBaselineDNS            = defaultCaptureBaselineDNS
 )
@@ -200,14 +199,15 @@ func Connect(cfg *config.Config, server *Server, callback StatusCallback) error 
 	if firewallIsActive() {
 		callback(ConnectionStatus{Stage: "Updating firewall for new server..."})
 
+		// Killswitch owns leak prevention only — LAN is the independent Local
+		// Network layer (la/st/lb tags), untouched here. Re-emitting the
+		// killswitch deletes+re-adds only ks rules, so its physical-interface
+		// reject lands after the (lower-numbered) LAN allow rules and LAN
+		// traffic survives the new endpoint update.
 		ksCfg := &firewall.KillswitchConfig{
 			InterfaceName: connName,
 			DNS:           wgCfg.DNS,
 			Endpoint:      wgCfg.EndpointIP(),
-			// LAN outbound: allowed unless LAN Block is active (Allow + Stealth).
-			AllowLocalNetwork: !firewallIsLANBlockActive(),
-			// LAN inbound: Allow mode only (not Stealth, not Block).
-			AllowLANInbound: !firewallIsLANBlockActive() && !firewallIsLANStealthActive(),
 		}
 
 		if err := firewallUpdate(ksCfg); err != nil {

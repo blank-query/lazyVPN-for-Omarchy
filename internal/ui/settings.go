@@ -10,6 +10,7 @@ import (
 
 	"github.com/blank-query/lazyVPN-for-Omarchy/internal/config"
 	"github.com/blank-query/lazyVPN-for-Omarchy/internal/tools"
+	"github.com/blank-query/lazyVPN-for-Omarchy/internal/update"
 	"github.com/blank-query/lazyVPN-for-Omarchy/internal/wireguard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -63,6 +64,12 @@ type Settings struct {
 	// Auth prompt — shown when a firewall operation
 	// returns ErrAuthRequired (user has no sudoers file).
 	auth AuthPrompt
+
+	// updateRelease is set once a manual check finds a newer release. While
+	// non-nil, the "Check for Updates Now" action becomes "Install update
+	// X.X.X" and selecting it installs (2-state: Check → Install). Cleared when
+	// a check finds nothing newer.
+	updateRelease *update.Release
 }
 
 func NewSettings(cfg *config.Config) *Settings {
@@ -200,6 +207,31 @@ func (m *Settings) adjustScroll() {
 	}
 }
 
+// updateCheckItem returns the Automation row for the manual update control.
+// It is state-aware (2-state): before a check (or when up to date) it's a
+// "Check" action; once a check has found a newer release it becomes an
+// "Install" action for that version.
+func updateCheckItem(rel *update.Release) settingItem {
+	if rel != nil {
+		return settingItem{
+			id:          "check-updates",
+			name:        "Install update " + rel.TagName,
+			value:       "available",
+			description: "Download and install " + rel.TagName + " now",
+			section:     "Automation",
+			isAction:    true,
+		}
+	}
+	return settingItem{
+		id:          "check-updates",
+		name:        "Check for Updates Now",
+		value:       "",
+		description: "Check GitHub for a newer release right now",
+		section:     "Automation",
+		isAction:    true,
+	}
+}
+
 func (m *Settings) buildItems() []settingItem {
 	cfg := m.cfg
 
@@ -262,7 +294,7 @@ func (m *Settings) buildItems() []settingItem {
 		{id: "auto-recover", name: "Auto-Recover Connection", value: onOff(cfg.AutoRecover), description: "Reconnect if connection drops", section: "Automation", isToggle: true},
 		{id: "auto-failover", name: "Auto-Failover", value: onOff(cfg.AutoFailover), description: "Try new server if current one fails", section: "Automation", isToggle: true},
 		{id: "auto-check-updates", name: "Auto-Check Updates", value: onOff(cfg.AutoCheckUpdates), description: "Check for new versions daily (disabled by default)", section: "Automation", isToggle: true},
-		{id: "check-updates", name: "Check for Updates Now", value: "", description: "Check GitHub for a newer release right now", section: "Automation", isAction: true},
+		updateCheckItem(m.updateRelease),
 
 		// Manual Servers
 		{id: "add-server", name: "Import WireGuard Config", value: serverCount, description: "Manually add a server config", section: "Servers", isAction: true},
@@ -354,14 +386,21 @@ func (m *Settings) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Release != nil {
-			m.statusText = "Update available: " + msg.Release.TagName + " — run 'lazyvpn update' to install"
+			m.statusText = "Update available: " + msg.Release.TagName + " — select again to install"
 			m.statusIsError = false
 			rel := msg.Release
+			// Flip the action to "Install update X.X.X" (2-state).
+			m.updateRelease = rel
+			m.items = m.buildItems()
+			m.splitColumns()
 			// Also raise the nav banner (handled in Layout).
 			return m, func() tea.Msg { return UpdateAvailableMsg{Release: rel} }
 		}
 		m.statusText = "You're on the latest version (" + Version + ")"
 		m.statusIsError = false
+		m.updateRelease = nil
+		m.items = m.buildItems()
+		m.splitColumns()
 		return m, nil
 	case tea.KeyMsg:
 		m.statusText = ""
@@ -525,9 +564,17 @@ func (m *Settings) handleSelection() (tea.Model, tea.Cmd) {
 			m.statusIsError = true
 		}
 	case "check-updates":
-		// Manual, on-demand update check. Result is reported via the footer
-		// overlay (ManualUpdateCheckMsg handled in Layout) — reuses the same
-		// checkForUpdate path the daily auto-check uses.
+		// 2-state action. If a prior check already found a newer release, this
+		// row reads "Install update X.X.X" and now installs it — reusing the
+		// same RunUpdateMsg path the nav-banner UpdateView uses (Layout calls
+		// update.Apply). Otherwise it's a "Check" that reports via
+		// ManualUpdateCheckMsg.
+		if m.updateRelease != nil {
+			rel := m.updateRelease
+			m.statusText = "Installing " + rel.TagName + "..."
+			m.statusIsError = false
+			return m, func() tea.Msg { return RunUpdateMsg{Release: rel} }
+		}
 		m.statusText = "Checking for updates..."
 		m.statusIsError = false
 		return m, func() tea.Msg {
@@ -638,12 +685,12 @@ func localNetworkMode(lanBlock, stealth bool) string {
 // localNetworkDescription returns the description text for the current LAN mode.
 func localNetworkDescription(lanBlock, stealth bool) string {
 	if stealth {
-		return "Stealth: outbound LAN works, inbound blocked (coffee shop mode)"
+		return "Stealth: outbound LAN works, inbound blocked (coffee-shop mode)"
 	}
 	if lanBlock {
-		return "Block: all LAN traffic blocked (coffee shop mode)"
+		return "Block: all LAN traffic blocked, in and out"
 	}
-	return "Allow: full LAN access (printers, file shares, etc.)"
+	return "Allow: full LAN access, inbound + outbound (printers, file shares, casting)"
 }
 
 func dnsProviderSummary(cfg *config.Config) string {

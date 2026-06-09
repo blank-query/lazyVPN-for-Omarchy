@@ -55,10 +55,9 @@ func TestSetLogFuncConcurrent(t *testing.T) {
 
 func TestKillswitchConfigStruct(t *testing.T) {
 	cfg := &KillswitchConfig{
-		InterfaceName:     "wg0",
-		DNS:               "10.2.0.1",
-		Endpoint:          "198.51.100.1",
-		AllowLocalNetwork: true,
+		InterfaceName: "wg0",
+		DNS:           "10.2.0.1",
+		Endpoint:      "198.51.100.1",
 	}
 
 	if cfg.InterfaceName != "wg0" {
@@ -70,18 +69,12 @@ func TestKillswitchConfigStruct(t *testing.T) {
 	if cfg.Endpoint != "198.51.100.1" {
 		t.Errorf("Endpoint = %q", cfg.Endpoint)
 	}
-	if !cfg.AllowLocalNetwork {
-		t.Error("AllowLocalNetwork should be true")
-	}
 }
 
 func TestKillswitchConfigDefaults(t *testing.T) {
 	cfg := &KillswitchConfig{}
 	if cfg.InterfaceName != "" {
 		t.Errorf("default InterfaceName should be empty, got %q", cfg.InterfaceName)
-	}
-	if cfg.AllowLocalNetwork {
-		t.Error("default AllowLocalNetwork should be false")
 	}
 }
 

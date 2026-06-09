@@ -195,10 +195,9 @@ func TestEnableAddsRules(t *testing.T) {
 	mock := setupMock(t)
 
 	cfg := &KillswitchConfig{
-		InterfaceName:     "wg0",
-		DNS:               "10.2.0.1",
-		Endpoint:          "198.51.100.1",
-		AllowLocalNetwork: true,
+		InterfaceName: "wg0",
+		DNS:           "10.2.0.1",
+		Endpoint:      "198.51.100.1",
 	}
 
 	// Use fake route so GetPhysicalInterface returns something
@@ -238,12 +237,14 @@ func TestEnableAddsRules(t *testing.T) {
 		t.Error("Missing endpoint rule")
 	}
 
-	// Should have local network rules
-	if !mock.hasRule("ufw allow out to 192.168.0.0/16 comment lazyvpn:ks") {
-		t.Error("Missing 192.168.0.0/16 local network rule")
+	// The killswitch must NOT own LAN rules — those belong to the independent
+	// Local Network layer (la/st/lb). A killswitch-tagged LAN allow would mean
+	// the two layers are entangled again.
+	if mock.hasRule("ufw allow out to 192.168.0.0/16 comment lazyvpn:ks") {
+		t.Error("Killswitch should not emit LAN rules (now owned by Local Network layer)")
 	}
-	if !mock.hasRule("ufw allow out to 10.0.0.0/8 comment lazyvpn:ks") {
-		t.Error("Missing 10.0.0.0/8 local network rule")
+	if mock.hasRule("ufw allow in from 192.168.0.0/16 comment lazyvpn:ks") {
+		t.Error("Killswitch should not emit LAN inbound rules (now owned by Local Network layer)")
 	}
 
 	// Should have VPN interface rule
@@ -257,6 +258,80 @@ func TestEnableAddsRules(t *testing.T) {
 	}
 	if !mock.hasRule("ufw reject out on eth0 comment lazyvpn:ks") {
 		t.Error("Missing WebRTC reject rule on physical interface")
+	}
+}
+
+// ruleIndex returns the position of the first active rule containing substr,
+// or -1. Rule order is UFW's first-match evaluation order.
+func (m *mockUFW) ruleIndex(substr string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, r := range m.rules {
+		if strings.Contains(r, substr) {
+			return i
+		}
+	}
+	return -1
+}
+
+// THE ordering invariant: a LAN allow-out rule must sit BEFORE the killswitch's
+// physical-interface reject, or first-match would let the reject swallow LAN
+// egress. Holds when LAN is established before the killswitch (install order).
+func TestLANAllowOutPrecedesKillswitchReject(t *testing.T) {
+	mock := setupMock(t)
+	withFakeRoute(t, "eth0")
+
+	// LAN constant first (as install establishes it), then killswitch.
+	if err := EnableLANStealth(); err != nil {
+		t.Fatalf("EnableLANStealth failed: %v", err)
+	}
+	if err := Enable(&KillswitchConfig{InterfaceName: "wg0", Endpoint: "198.51.100.1"}); err != nil {
+		t.Fatalf("Enable failed: %v", err)
+	}
+
+	allowOut := mock.ruleIndex("allow out to 192.168.0.0/16 comment lazyvpn:st")
+	reject := mock.ruleIndex("reject out on eth0 comment lazyvpn:ks")
+	if allowOut < 0 {
+		t.Fatal("stealth allow-out rule missing")
+	}
+	if reject < 0 {
+		t.Fatal("killswitch reject rule missing")
+	}
+	if allowOut >= reject {
+		t.Errorf("LAN allow-out (idx %d) must precede killswitch reject (idx %d)", allowOut, reject)
+	}
+}
+
+// When the LAN mode changes WHILE the killswitch is active, the fresh LAN
+// allow-out rules get appended after the existing reject (wrong order). The
+// dashboard fixes this by re-applying the killswitch, which deletes+re-adds the
+// reject so it lands last again. This pins that recovery at the firewall level.
+func TestReapplyKillswitchRestoresRejectLast(t *testing.T) {
+	mock := setupMock(t)
+	withFakeRoute(t, "eth0")
+
+	// Killswitch on first, then a late LAN mode add.
+	if err := Enable(&KillswitchConfig{InterfaceName: "wg0", Endpoint: "198.51.100.1"}); err != nil {
+		t.Fatalf("Enable failed: %v", err)
+	}
+	if err := EnableLANStealth(); err != nil {
+		t.Fatalf("EnableLANStealth failed: %v", err)
+	}
+
+	// Late add leaves allow-out AFTER the reject — the broken state.
+	if mock.ruleIndex("allow out to 192.168.0.0/16 comment lazyvpn:st") <= mock.ruleIndex("reject out on eth0 comment lazyvpn:ks") {
+		t.Fatal("precondition: late LAN add should leave allow-out after reject")
+	}
+
+	// Re-apply the killswitch (what the dashboard does on LAN change).
+	if err := Update(&KillswitchConfig{InterfaceName: "wg0", Endpoint: "198.51.100.1"}); err != nil {
+		t.Fatalf("Update (reapply) failed: %v", err)
+	}
+
+	allowOut := mock.ruleIndex("allow out to 192.168.0.0/16 comment lazyvpn:st")
+	reject := mock.ruleIndex("reject out on eth0 comment lazyvpn:ks")
+	if allowOut >= reject {
+		t.Errorf("after reapply, LAN allow-out (idx %d) must precede reject (idx %d)", allowOut, reject)
 	}
 }
 
@@ -371,45 +446,118 @@ func TestEnableEmptyInterface(t *testing.T) {
 	}
 }
 
-func TestEnableAllLocalNetworkRanges(t *testing.T) {
+// withFakeRoute points GetPhysicalInterface at a fake /proc/net/route so the
+// LAN-layer functions (which require a physical interface) can run under test.
+func withFakeRoute(t *testing.T, iface string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	routeFile := filepath.Join(tmpDir, "route")
+	content := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
+		iface + "\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+	os.WriteFile(routeFile, []byte(content), 0644)
+	oldPath := procNetRoutePath
+	procNetRoutePath = routeFile
+	t.Cleanup(func() { procNetRoutePath = oldPath })
+}
+
+// The killswitch is leak-prevention only; LAN access is the independent Local
+// Network layer's job. Enabling the killswitch must not add any LAN rules.
+func TestEnableEmitsNoLANRules(t *testing.T) {
 	mock := setupMock(t)
+	withFakeRoute(t, "eth0")
 
-	cfg := &KillswitchConfig{
-		InterfaceName:     "wg0",
-		AllowLocalNetwork: true,
-	}
-
-	if err := Enable(cfg); err != nil {
+	if err := Enable(&KillswitchConfig{InterfaceName: "wg0", Endpoint: "198.51.100.1"}); err != nil {
 		t.Fatalf("Enable failed: %v", err)
 	}
 
-	// IPv4 private ranges
-	for _, cidr := range privateCIDRsV4 {
-		if !mock.hasRule("ufw allow out to " + cidr + " comment lazyvpn:ks") {
-			t.Errorf("Missing local network rule for %s", cidr)
+	for _, cidr := range append(append([]string{}, privateCIDRsV4...), privateCIDRsV6...) {
+		if mock.hasRule("ufw allow out to " + cidr + " comment lazyvpn:ks") {
+			t.Errorf("killswitch must not emit LAN out rule for %s", cidr)
 		}
-	}
-
-	// IPv6 private ranges
-	for _, cidr := range privateCIDRsV6 {
-		if !mock.hasRule("ufw allow out to " + cidr + " comment lazyvpn:ks") {
-			t.Errorf("Missing local network rule for %s", cidr)
+		if mock.hasRule("ufw allow in from " + cidr + " comment lazyvpn:ks") {
+			t.Errorf("killswitch must not emit LAN in rule for %s", cidr)
 		}
 	}
 }
 
-func TestNoLocalNetworkRulesWhenDisabled(t *testing.T) {
+// EnableLANAllow lays down explicit allow in+out rules for every private range,
+// so "full LAN access" is a real, inspectable posture rather than a reliance on
+// the base policy.
+func TestEnableLANAllowAddsExplicitRules(t *testing.T) {
 	mock := setupMock(t)
+	withFakeRoute(t, "eth0")
 
-	cfg := &KillswitchConfig{
-		InterfaceName:     "wg0",
-		AllowLocalNetwork: false,
+	if err := EnableLANAllow(); err != nil {
+		t.Fatalf("EnableLANAllow failed: %v", err)
 	}
 
-	Enable(cfg)
+	for _, cidr := range privateCIDRsV4 {
+		if !mock.hasRule("ufw allow out to " + cidr + " comment lazyvpn:la") {
+			t.Errorf("Missing LAN allow-out rule for %s", cidr)
+		}
+		if !mock.hasRule("ufw allow in on eth0 from " + cidr + " comment lazyvpn:la") {
+			t.Errorf("Missing LAN allow-in rule for %s", cidr)
+		}
+	}
+	for _, cidr := range privateCIDRsV6 {
+		if !mock.hasRule("ufw allow out to " + cidr + " comment lazyvpn:la") {
+			t.Errorf("Missing LAN allow-out rule for %s", cidr)
+		}
+		if !mock.hasRule("ufw allow in on eth0 from " + cidr + " comment lazyvpn:la") {
+			t.Errorf("Missing LAN allow-in rule for %s", cidr)
+		}
+	}
+}
 
-	if mock.hasRule("ufw allow out to 192.168.0.0/16 comment lazyvpn:ks") {
-		t.Error("Should not have local network rule when AllowLocalNetwork=false")
+func TestDisableLANAllow(t *testing.T) {
+	mock := setupMock(t)
+	withFakeRoute(t, "eth0")
+
+	if err := EnableLANAllow(); err != nil {
+		t.Fatalf("EnableLANAllow failed: %v", err)
+	}
+	if mock.countRulesWithTag(TagLANAllow) == 0 {
+		t.Fatal("expected LAN allow rules after EnableLANAllow")
+	}
+	if err := DisableLANAllow(); err != nil {
+		t.Fatalf("DisableLANAllow failed: %v", err)
+	}
+	if mock.countRulesWithTag(TagLANAllow) != 0 {
+		t.Errorf("expected 0 LAN allow rules after DisableLANAllow, got %d", mock.countRulesWithTag(TagLANAllow))
+	}
+}
+
+func TestIsLANAllowActive(t *testing.T) {
+	setupMock(t)
+	withFakeRoute(t, "eth0")
+
+	if IsLANAllowActive() {
+		t.Error("IsLANAllowActive should be false before enabling")
+	}
+	if err := EnableLANAllow(); err != nil {
+		t.Fatalf("EnableLANAllow failed: %v", err)
+	}
+	if !IsLANAllowActive() {
+		t.Error("IsLANAllowActive should be true after enabling")
+	}
+}
+
+// Stealth now lays down an explicit allow-out rule (not just deny-in), so the
+// "outbound LAN works" promise is inspectable and survives the killswitch.
+func TestEnableLANStealthAddsExplicitAllowOut(t *testing.T) {
+	mock := setupMock(t)
+	withFakeRoute(t, "eth0")
+
+	if err := EnableLANStealth(); err != nil {
+		t.Fatalf("EnableLANStealth failed: %v", err)
+	}
+	for _, cidr := range privateCIDRsV4 {
+		if !mock.hasRule("ufw allow out to " + cidr + " comment lazyvpn:st") {
+			t.Errorf("Missing stealth allow-out rule for %s", cidr)
+		}
+		if !mock.hasRule("ufw deny in on eth0 from " + cidr + " comment lazyvpn:st") {
+			t.Errorf("Missing stealth deny-in rule for %s", cidr)
+		}
 	}
 }
 
@@ -694,14 +842,16 @@ func TestEnableSimpleBlocksAll(t *testing.T) {
 		t.Error("Missing loopback in rule")
 	}
 
-	// LAN allowed both directions by default so SSH/LAN survive while disconnected
-	if !mock.hasRule("ufw allow in from 192.168.0.0/16 comment lazyvpn:ks") {
-		t.Error("Missing LAN inbound allow rule")
+	// Simple mode emits NO LAN rules — the independent Local Network layer owns
+	// LAN, and its allow-out rules (lower numbers) beat this default-deny so
+	// LAN/SSH survive while disconnected.
+	if mock.hasRule("ufw allow in from 192.168.0.0/16 comment lazyvpn:ks") {
+		t.Error("Simple killswitch must not emit LAN rules")
 	}
 
-	// loopback (2) + V4 CIDRs (4*2) + V6 CIDRs (2*2) = 14
-	if mock.countRulesWithTag(TagKillswitch) != 14 {
-		t.Errorf("Expected 14 killswitch rules, got %d", mock.countRulesWithTag(TagKillswitch))
+	// loopback out + loopback in = 2 (no LAN rules anymore)
+	if mock.countRulesWithTag(TagKillswitch) != 2 {
+		t.Errorf("Expected 2 killswitch rules, got %d", mock.countRulesWithTag(TagKillswitch))
 	}
 }
 
@@ -1424,12 +1574,17 @@ func TestEnableLANStealth_RollbackRemovesPartialRules(t *testing.T) {
 	procNetRoutePath = routeFile
 	t.Cleanup(func() { procNetRoutePath = oldPath })
 
-	// Call sequence:
-	//   call 0: show added
-	//   call 1: addRule allow DHCP                         (lands)
-	//   call 2: addRule deny in from 192.168.0.0/16        (lands)
-	//   call 3: addRule deny in from 10.0.0.0/8            <-- inject (FAIL)
-	mock.errors[3] = fmt.Errorf("simulated ufw failure mid-sequence")
+	// Call sequence (stealth now also emits explicit allow-out rules before the
+	// deny-in rules):
+	//   call 0: show added (deleteRulesByTag scan)
+	//   call 1: status     (ensureUFWEnabled check)
+	//   call 2: addRule allow in DHCP on eth0              (lands)
+	//   call 3..8: addRule allow out to <6 private CIDRs>  (land)
+	//   call 9: addRule deny in from 192.168.0.0/16        (lands)
+	//   call 10: addRule deny in from 10.0.0.0/8           <-- inject (FAIL)
+	// By now DHCP + all allow-out + one deny-in have landed, so the rollback
+	// must wipe a mix of rule types, not just the failed one.
+	mock.errors[10] = fmt.Errorf("simulated ufw failure mid-sequence")
 
 	if err := EnableLANStealth(); err == nil {
 		t.Fatal("EnableLANStealth should return error when mid-sequence addRule fails")
@@ -1473,10 +1628,11 @@ func TestTeardown(t *testing.T) {
 	procNetRoutePath = routeFile
 	t.Cleanup(func() { procNetRoutePath = oldPath })
 
-	// Enable everything
+	// Enable everything, including the explicit LAN allow layer (tag la).
 	Enable(&KillswitchConfig{InterfaceName: "wg0", Endpoint: "198.51.100.1"})
 	EnableLANBlock("wg0", "198.51.100.1", "192.168.1.1", "10.2.0.1")
 	EnableLANStealth()
+	EnableLANAllow()
 
 	if err := Teardown(); err != nil {
 		t.Fatalf("Teardown failed: %v", err)
@@ -1495,7 +1651,7 @@ func TestTeardown(t *testing.T) {
 	}
 
 	// All tagged rules should be removed
-	for _, tag := range []string{TagKillswitch, TagLANBlock, TagStealth, TagIPv6} {
+	for _, tag := range []string{TagKillswitch, TagLANBlock, TagStealth, TagLANAllow, TagIPv6} {
 		if mock.countRulesWithTag(tag) != 0 {
 			t.Errorf("Should have no rules with tag %s after Teardown", tag)
 		}
@@ -2234,10 +2390,9 @@ func TestFullLifecycle(t *testing.T) {
 
 	// 1. Enable
 	cfg := &KillswitchConfig{
-		InterfaceName:     "wg0",
-		DNS:               "10.2.0.1",
-		Endpoint:          "198.51.100.1",
-		AllowLocalNetwork: true,
+		InterfaceName: "wg0",
+		DNS:           "10.2.0.1",
+		Endpoint:      "198.51.100.1",
 	}
 	if err := Enable(cfg); err != nil {
 		t.Fatalf("Enable failed: %v", err)
@@ -2283,9 +2438,9 @@ func TestFullLifecycle(t *testing.T) {
 	if !IsActive() {
 		t.Error("Should be active after EnableSimple")
 	}
-	// loopback (2) + V4 CIDRs (4*2) + V6 CIDRs (2*2) = 14
-	if mock.countRulesWithTag(TagKillswitch) != 14 {
-		t.Errorf("Expected 14 killswitch rules, got %d", mock.countRulesWithTag(TagKillswitch))
+	// loopback out + loopback in = 2 (no LAN rules anymore)
+	if mock.countRulesWithTag(TagKillswitch) != 2 {
+		t.Errorf("Expected 2 killswitch rules, got %d", mock.countRulesWithTag(TagKillswitch))
 	}
 
 	// 5. Update when active with EnableSimple should work
