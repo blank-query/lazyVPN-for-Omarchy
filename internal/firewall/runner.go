@@ -135,23 +135,24 @@ func hasRulesWithTag(tag string) bool {
 
 // getDefaultOutgoingPolicy parses `ufw status verbose` and returns the default
 // outgoing policy ("allow", "deny", "reject", or "" on error).
-func getDefaultOutgoingPolicy() string {
+func getDefaultOutgoingPolicy() string { return getDefaultPolicy("(outgoing)") }
+
+// getDefaultPolicy parses `ufw status verbose` for the policy word preceding
+// the given direction marker ("(incoming)" or "(outgoing)"). The line looks
+// like: "Default: deny (incoming), deny (outgoing), disabled (routed)".
+func getDefaultPolicy(direction string) string {
 	out, err := runUFW.Run("status", "verbose")
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		// Look for line like: "Default: deny (incoming), deny (outgoing), disabled (routed)"
 		if strings.HasPrefix(line, "Default:") {
-			// Find the outgoing policy
-			parts := strings.Split(line, ",")
-			for _, part := range parts {
+			for _, part := range strings.Split(line, ",") {
 				part = strings.TrimSpace(part)
-				if strings.Contains(part, "(outgoing)") {
-					// Extract policy word before "(outgoing)"
+				if strings.Contains(part, direction) {
 					fields := strings.Fields(part)
 					for i, f := range fields {
-						if f == "(outgoing)" && i > 0 {
+						if f == direction && i > 0 {
 							return fields[i-1]
 						}
 					}

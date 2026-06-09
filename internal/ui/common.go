@@ -67,6 +67,7 @@ var notifyError = notify.Error
 var notifyInfo = notify.Info
 
 var isFirewallActive = firewall.IsActive
+var firewallReconcile = firewall.Reconcile
 var firewallEnable = firewall.Enable
 var firewallEnableSimple = firewall.EnableSimple
 var firewallDisable = firewall.Disable
@@ -76,8 +77,6 @@ var firewallEnableLANStealth = firewall.EnableLANStealth
 var firewallDisableLANStealth = firewall.DisableLANStealth
 var firewallEnableLANBlock = firewall.EnableLANBlock // func(vpnInterface, endpoint, gateway, dns string) error
 var firewallDisableLANBlock = firewall.DisableLANBlock
-var firewallEnableLANAllow = firewall.EnableLANAllow
-var firewallDisableLANAllow = firewall.DisableLANAllow
 var firewallIsLANBlockActive = firewall.IsLANBlockActive
 var firewallIsLANStealthActive = firewall.IsLANStealthActive
 var firewallIsIPv6Disabled = firewall.IsIPv6Disabled

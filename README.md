@@ -27,13 +27,24 @@ LazyVPN is a compiled Go binary with a built-in [Bubbletea](https://github.com/c
 
 ## Quick Start
 
-**Get connected in 30 seconds:**
+**Download the latest release binary, then install:**
+
+```bash
+curl -L -o lazyvpn https://github.com/blank-query/lazyVPN-for-Omarchy/releases/latest/download/lazyvpn
+chmod +x lazyvpn
+./lazyvpn install
+```
+
+<details>
+<summary><b>Or build from source</b> (requires Go 1.25+)</summary>
 
 ```bash
 git clone https://github.com/blank-query/lazyVPN-for-Omarchy.git
 cd lazyVPN-for-Omarchy
+go build -ldflags "-X main.Version=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)" -o lazyvpn ./cmd/lazyvpn
 ./lazyvpn install
 ```
+</details>
 
 Press `SUPER+SHIFT+L` to launch, or run `lazyvpn` from a terminal.
 

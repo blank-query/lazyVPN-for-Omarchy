@@ -2,6 +2,29 @@
 
 All notable changes to LazyVPN are documented here.
 
+## 1.0.4
+
+Clears up the firewall model — three independent layers (Killswitch, Local
+Network, IPv6), each toggled by a single full rebuild of the UFW ruleset.
+
+- **Killswitch is outbound-only**: it forces traffic through the tunnel
+  (`deny outgoing` + reject on the physical interface) and never touches the
+  incoming policy. Inbound is owned entirely by the Local Network layer.
+- **Local Network owns the inbound posture:**
+  - **Allow** — LAN reachable inbound + outbound.
+  - **Stealth** — outbound LAN works; *all* unsolicited inbound is blocked
+    (LAN and internet), replies still flow.
+  - **Block** — total LAN isolation: only the gateway is locally reachable
+    (so you can still route out), no LAN in or out, no inbound at all.
+- **Every UFW toggle now triggers a full teardown-and-rebuild** of the entire
+  lazyvpn ruleset in one validated, deterministic order, instead of editing
+  rules incrementally — so rule ordering and layer independence are correct by
+  construction.
+- IPv6 protection is a self-standing UFW layer alongside the other two.
+- Docs: fix the README Quick Start (it told users to run `./lazyvpn install`
+  but shipped no binary and no build step) — now leads with the release-binary
+  download, with build-from-source as a fallback. (#10)
+
 ## 1.0.3
 
 - Docs: refresh the README to match the 1.0.2 model — the killswitch (force traffic through the tunnel) and Local Network (Allow/Stealth/Block) are independent layers, Stealth is the install-time default, and the tagged-rules list now includes `lazyvpn:la`.

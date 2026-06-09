@@ -634,6 +634,33 @@ func (d *Dashboard) handleAction(act dashboardAction) (tea.Model, tea.Cmd) {
 	return d, nil
 }
 
+// firewallDesiredState assembles the complete desired firewall posture from the
+// dashboard's current (already-flipped) cached flags. Every toggle handler
+// mutates the one flag it owns, then hands this whole state to firewallReconcile
+// so the ENTIRE ruleset is torn down and rebuilt in one validated pass — no
+// incremental rule editing, no per-toggle special cases.
+func (d *Dashboard) firewallDesiredState() firewall.State {
+	ksCfg := d.buildKillswitchConfig()
+	mode := firewall.LANAllow
+	switch {
+	case d.stealthMode:
+		mode = firewall.LANStealth
+	case d.lanBlock:
+		mode = firewall.LANBlock
+	}
+	_, gw, _ := firewallGetPhysicalInterface()
+	return firewall.State{
+		Killswitch:    d.killswitch,
+		Connected:     isWGConnected(d.cfg.ConnectionName),
+		InterfaceName: ksCfg.InterfaceName,
+		Endpoint:      ksCfg.Endpoint,
+		DNS:           ksCfg.DNS,
+		Gateway:       gw,
+		LANMode:       mode,
+		IPv6Blocked:   d.ipv6Disabled,
+	}
+}
+
 func (d *Dashboard) handleKillswitchToggle() (tea.Model, tea.Cmd) {
 	if d.firewallBusy {
 		return d, nil
@@ -644,25 +671,9 @@ func (d *Dashboard) handleKillswitchToggle() (tea.Model, tea.Cmd) {
 	d.killswitch = enable
 	d.firewallBusy = true
 
-	// Capture state for the goroutine
-	connected := isWGConnected(d.cfg.ConnectionName)
-	var ksCfg *firewall.KillswitchConfig
-	if connected && enable {
-		ksCfg = d.buildKillswitchConfig()
-	}
-
-	doOp := func() error {
-		if enable {
-			if connected {
-				return firewallEnable(ksCfg)
-			}
-			return firewallEnableSimple()
-		}
-		return firewallDisable()
-	}
-	undoOp := func() {
-		d.killswitch = !enable
-	}
+	state := d.firewallDesiredState() // reflects the flipped d.killswitch
+	doOp := func() error { return firewallReconcile(state) }
+	undoOp := func() { d.killswitch = !enable }
 
 	return d, func() tea.Msg {
 		err := doOp()
@@ -715,15 +726,21 @@ func (d *Dashboard) handleIPv6Toggle() (tea.Model, tea.Cmd) {
 	d.ipv6Disabled = disable
 	d.firewallBusy = true
 
+	state := d.firewallDesiredState() // reflects the flipped d.ipv6Disabled
 	doOp := func() error {
+		// The kernel-level IPv6 enable/disable (sysctl + /proc) is separate from
+		// the UFW rules, so do it first; then Reconcile rebuilds the full UFW
+		// ruleset (including the v6 deny rules) from the desired state.
 		if disable {
-			return firewallDisableIPv6()
+			if err := firewallDisableIPv6(); err != nil {
+				return err
+			}
+		} else if err := firewallEnableIPv6(); err != nil {
+			return err
 		}
-		return firewallEnableIPv6()
+		return firewallReconcile(state)
 	}
-	undoOp := func() {
-		d.ipv6Disabled = !disable
-	}
+	undoOp := func() { d.ipv6Disabled = !disable }
 
 	return d, func() tea.Msg {
 		err := doOp()
@@ -736,7 +753,6 @@ func (d *Dashboard) handleLocalNetworkCycle() (tea.Model, tea.Cmd) {
 		return d, nil
 	}
 	// Cycle: Allow → Stealth → Block → Allow.
-	// Cached flags d.lanBlock and d.stealthMode reflect the UFW rules.
 	prevLanBlock, prevStealth := d.lanBlock, d.stealthMode
 	var newLanBlock, newStealth bool
 	switch {
@@ -751,98 +767,12 @@ func (d *Dashboard) handleLocalNetworkCycle() (tea.Model, tea.Cmd) {
 	d.lanBlock, d.stealthMode = newLanBlock, newStealth
 	d.firewallBusy = true
 
-	// Capture state for goroutine. Snapshot LastConnectedServer too —
-	// without it, the doOp closure would re-read d.cfg.LastConnectedServer
-	// at retry time, which can drift if d.refresh() ran cfg.Reload()
-	// between dispatch and retry. A drift from "" → real-server would
-	// flip the ksActive guard true while ksCfg's Endpoint/DNS are still
-	// empty (since ksCfg was captured at dispatch time), corrupting the
-	// killswitch with a "full" config missing the actual endpoint allow.
-	connName := d.cfg.ConnectionName
-	connected := isWGConnected(connName)
-	ksActive := isFirewallActive()
-	lastConnServer := d.cfg.LastConnectedServer
-
-	// Pre-compute params needed by goroutine
-	var ksCfg *firewall.KillswitchConfig
-	var vpnIface, endpoint, gw, dns string
-	if ksActive || newLanBlock {
-		ksCfg = d.buildKillswitchConfig()
-	}
-	if newLanBlock {
-		if connected {
-			vpnIface = connName
-			endpoint = ksCfg.Endpoint
-			dns = ksCfg.DNS
-		}
-		_, gw, _ = firewallGetPhysicalInterface()
-	}
-
-	undoOp := func() {
-		d.lanBlock, d.stealthMode = prevLanBlock, prevStealth
-	}
-
-	// Allow is now an explicit rule set (tag la), not the absence of rules —
-	// so transitions into/out of Allow toggle it like the other two modes.
-	prevAllow := !prevLanBlock && !prevStealth
-	newAllow := !newLanBlock && !newStealth
-
-	doOp := func() error {
-		// LAN allow rules (explicit full-access mode)
-		if newAllow && !prevAllow {
-			if err := firewallEnableLANAllow(); err != nil {
-				return err
-			}
-		} else if !newAllow && prevAllow {
-			if err := firewallDisableLANAllow(); err != nil {
-				return err
-			}
-		}
-
-		// Stealth rules
-		if newStealth && !prevStealth {
-			if err := firewallEnableLANStealth(); err != nil {
-				return err
-			}
-		} else if !newStealth && prevStealth {
-			if err := firewallDisableLANStealth(); err != nil {
-				return err
-			}
-		}
-
-		// LAN block rules
-		if newLanBlock && !prevLanBlock {
-			if err := firewallEnableLANBlock(vpnIface, endpoint, gw, dns); err != nil {
-				return err
-			}
-		} else if !newLanBlock && prevLanBlock {
-			if err := firewallDisableLANBlock(); err != nil {
-				return err
-			}
-		}
-
-		// Re-apply the killswitch when active so its physical-interface reject
-		// is re-appended AFTER the LAN rules we just changed. The new LAN
-		// allow-out rules land at higher UFW rule numbers than the old reject;
-		// re-emitting the killswitch deletes that reject and re-adds it last, so
-		// LAN egress (lower-numbered) wins by first-match again. Without this,
-		// switching modes while the killswitch is on would let the stale reject
-		// shadow the fresh LAN rules.
-		// Skip when no server has been connected yet — we're in EnableSimple
-		// state (no DNS/endpoint allow rules, and no reject to reorder), and
-		// calling Enable here with the empty ksCfg would replace the simple
-		// killswitch with a "full" one missing DNS allow rules, breaking
-		// system-wide DNS resolution. Use the captured lastConnServer
-		// (snapshotted at dispatch time, alongside ksCfg) so the guard and the
-		// config are evaluated against the same point-in-time state.
-		if ksActive && lastConnServer != "" {
-			if err := firewallEnable(ksCfg); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
+	// Hand the whole desired state to Reconcile — a full rebuild re-emits the
+	// LAN rules AND (if the killswitch is on) re-lays its reject after them, so
+	// ordering and the killswitch/Stealth DHCP-in dedup are handled in one pass.
+	state := d.firewallDesiredState() // reflects the new LAN mode
+	doOp := func() error { return firewallReconcile(state) }
+	undoOp := func() { d.lanBlock, d.stealthMode = prevLanBlock, prevStealth }
 
 	return d, func() tea.Msg {
 		err := doOp()

@@ -542,8 +542,9 @@ func TestIsLANAllowActive(t *testing.T) {
 	}
 }
 
-// Stealth now lays down an explicit allow-out rule (not just deny-in), so the
-// "outbound LAN works" promise is inspectable and survives the killswitch.
+// Stealth lays down an explicit allow-out per private range, plus ONE broad
+// deny-in on the physical interface (blocks unsolicited inbound from any
+// source, LAN or internet — replies/NDP survive via UFW's before.rules).
 func TestEnableLANStealthAddsExplicitAllowOut(t *testing.T) {
 	mock := setupMock(t)
 	withFakeRoute(t, "eth0")
@@ -555,9 +556,13 @@ func TestEnableLANStealthAddsExplicitAllowOut(t *testing.T) {
 		if !mock.hasRule("ufw allow out to " + cidr + " comment lazyvpn:st") {
 			t.Errorf("Missing stealth allow-out rule for %s", cidr)
 		}
-		if !mock.hasRule("ufw deny in on eth0 from " + cidr + " comment lazyvpn:st") {
-			t.Errorf("Missing stealth deny-in rule for %s", cidr)
-		}
+	}
+	if !mock.hasRule("ufw deny in on eth0 comment lazyvpn:st") {
+		t.Error("Missing broad stealth deny-in rule (deny in on eth0)")
+	}
+	// And it must NOT use the old per-CIDR inbound deny.
+	if mock.hasRule("ufw deny in on eth0 from 192.168.0.0/16 comment lazyvpn:st") {
+		t.Error("Stealth should use a broad deny-in, not per-CIDR")
 	}
 }
 
@@ -911,6 +916,7 @@ func TestEnableSimpleIsActive(t *testing.T) {
 
 func TestEnableLANBlock(t *testing.T) {
 	mock := setupMock(t)
+	withFakeRoute(t, "eth0")
 
 	if err := EnableLANBlock("wg0", "198.51.100.1", "192.168.1.1", "10.2.0.1"); err != nil {
 		t.Fatalf("EnableLANBlock failed: %v", err)
@@ -961,16 +967,13 @@ func TestEnableLANBlock(t *testing.T) {
 		}
 	}
 
-	// Should have inbound deny rules for private CIDRs
-	for _, cidr := range privateCIDRsV4 {
-		if !mock.hasRule("ufw deny in from " + cidr + " comment lazyvpn:lb") {
-			t.Errorf("Missing inbound deny rule for %s", cidr)
-		}
+	// Should have ONE broad inbound deny on the physical interface (blocks all
+	// unsolicited inbound — LAN and internet, SSH included; replies survive).
+	if !mock.hasRule("ufw deny in on eth0 comment lazyvpn:lb") {
+		t.Error("Missing broad inbound deny rule (deny in on eth0)")
 	}
-	for _, cidr := range privateCIDRsV6 {
-		if !mock.hasRule("ufw deny in from " + cidr + " comment lazyvpn:lb") {
-			t.Errorf("Missing inbound deny rule for %s", cidr)
-		}
+	if mock.hasRule("ufw deny in from 192.168.0.0/16 comment lazyvpn:lb") {
+		t.Error("Block should use a broad deny-in, not per-CIDR")
 	}
 }
 
@@ -1042,16 +1045,16 @@ func TestEnableLANBlockEmptyEndpoint(t *testing.T) {
 
 func TestEnableLANBlockEmptyGateway(t *testing.T) {
 	mock := setupMock(t)
+	withFakeRoute(t, "eth0") // detected gateway = 192.168.1.1
 
 	if err := EnableLANBlock("wg0", "198.51.100.1", "", "10.2.0.1"); err != nil {
 		t.Fatalf("EnableLANBlock failed: %v", err)
 	}
 
-	// Should not have gateway rule
-	for _, r := range mock.getRules() {
-		if strings.Contains(r, "/32") {
-			t.Errorf("Should not have gateway rule, found: %s", r)
-		}
+	// Block must always be able to reach the gateway (it's the one local
+	// exception). With no gateway passed, it falls back to the detected default.
+	if !mock.hasRule("ufw allow out to 192.168.1.1/32 comment lazyvpn:lb") {
+		t.Error("Block should fall back to the detected gateway when none is passed")
 	}
 }
 
@@ -1223,16 +1226,10 @@ func TestEnableLANStealth(t *testing.T) {
 		t.Error("Missing DHCP inbound allow rule")
 	}
 
-	// Should have deny rules for private CIDRs
-	for _, cidr := range privateCIDRsV4 {
-		if !mock.hasRule("ufw deny in on eth0 from " + cidr + " comment lazyvpn:st") {
-			t.Errorf("Missing deny inbound rule for %s", cidr)
-		}
-	}
-	for _, cidr := range privateCIDRsV6 {
-		if !mock.hasRule("ufw deny in on eth0 from " + cidr + " comment lazyvpn:st") {
-			t.Errorf("Missing deny inbound rule for %s", cidr)
-		}
+	// Should have one broad deny-in on the physical interface (blocks all
+	// unsolicited inbound, any source — replies/NDP survive via before.rules).
+	if !mock.hasRule("ufw deny in on eth0 comment lazyvpn:st") {
+		t.Error("Missing broad deny-in rule (deny in on eth0)")
 	}
 }
 
@@ -1574,17 +1571,16 @@ func TestEnableLANStealth_RollbackRemovesPartialRules(t *testing.T) {
 	procNetRoutePath = routeFile
 	t.Cleanup(func() { procNetRoutePath = oldPath })
 
-	// Call sequence (stealth now also emits explicit allow-out rules before the
-	// deny-in rules):
+	// Call sequence (broadened stealth: DHCP-in, allow-out per range, then ONE
+	// broad deny-in):
 	//   call 0: show added (deleteRulesByTag scan)
 	//   call 1: status     (ensureUFWEnabled check)
 	//   call 2: addRule allow in DHCP on eth0              (lands)
 	//   call 3..8: addRule allow out to <6 private CIDRs>  (land)
-	//   call 9: addRule deny in from 192.168.0.0/16        (lands)
-	//   call 10: addRule deny in from 10.0.0.0/8           <-- inject (FAIL)
-	// By now DHCP + all allow-out + one deny-in have landed, so the rollback
-	// must wipe a mix of rule types, not just the failed one.
-	mock.errors[10] = fmt.Errorf("simulated ufw failure mid-sequence")
+	//   call 9: addRule deny in on eth0 (broad)            <-- inject (FAIL)
+	// By now DHCP + all allow-out rules have landed, so the rollback must wipe a
+	// mix of rule types, not just the failed one.
+	mock.errors[9] = fmt.Errorf("simulated ufw failure mid-sequence")
 
 	if err := EnableLANStealth(); err == nil {
 		t.Fatal("EnableLANStealth should return error when mid-sequence addRule fails")
@@ -1658,47 +1654,33 @@ func TestTeardown(t *testing.T) {
 	}
 }
 
-// Regression: lazyvpn's enableLocked/EnableSimple/EnableLANBlock/etc. only
-// ever touch the OUTGOING default policy. The incoming default is the
-// user's pre-install setting (Arch's UFW default is "deny incoming";
-// many users rely on that). Pre-fix Teardown unconditionally ran
-// `ufw default allow incoming`, silently widening the firewall on
-// uninstall — the user ended up with a less restrictive incoming policy
-// than they had before installing lazyvpn.
-//
-// Teardown must restore only what lazyvpn changed (outgoing) and leave
-// the rest of the user's policy alone.
-func TestTeardown_PreservesUserIncomingDefault(t *testing.T) {
+// The killswitch is OUTBOUND-ONLY: it flips the outgoing default to deny and
+// never touches the incoming policy (inbound is owned by the Local Network
+// layer). Teardown resets only what it changed — outgoing back to allow,
+// incoming left exactly as the user had it.
+func TestKillswitchIsOutboundOnly(t *testing.T) {
 	mock := setupMock(t)
-
-	// Simulate Arch's typical pre-install state: deny incoming, allow
-	// outgoing. The user enables lazyvpn (which flips outgoing to deny
-	// via EnableSimple's killswitch) and later uninstalls.
-	mock.defaultIncoming = "deny"
+	mock.defaultIncoming = "allow" // user's policy — must never be touched
 	mock.defaultOutgoing = "allow"
 
 	if err := EnableSimple(); err != nil {
 		t.Fatalf("EnableSimple failed: %v", err)
 	}
 	if mock.defaultOutgoing != "deny" {
-		t.Fatalf("setup precondition failed: outgoing should be 'deny' after EnableSimple, got %q", mock.defaultOutgoing)
+		t.Fatalf("outgoing should be 'deny' after EnableSimple, got %q", mock.defaultOutgoing)
 	}
-	if mock.defaultIncoming != "deny" {
-		t.Fatalf("setup precondition failed: incoming was 'deny' before EnableSimple and lazyvpn must not touch it, got %q", mock.defaultIncoming)
+	if mock.defaultIncoming != "allow" {
+		t.Errorf("killswitch is outbound-only: incoming must stay 'allow', got %q", mock.defaultIncoming)
 	}
 
 	if err := Teardown(); err != nil {
 		t.Fatalf("Teardown failed: %v", err)
 	}
-
-	// Outgoing: lazyvpn changed it to deny, must reset.
 	if mock.defaultOutgoing != "allow" {
-		t.Errorf("Default outgoing should be 'allow' after Teardown (lazyvpn reset it), got %q", mock.defaultOutgoing)
+		t.Errorf("outgoing should be restored to 'allow' after Teardown, got %q", mock.defaultOutgoing)
 	}
-	// Incoming: lazyvpn never changed it. Teardown must not change it
-	// either. Pre-fix this asserted "allow" because Teardown forced it.
-	if mock.defaultIncoming != "deny" {
-		t.Errorf("Default incoming should still be 'deny' after Teardown — lazyvpn never modified it, so Teardown must not reset it. Got %q", mock.defaultIncoming)
+	if mock.defaultIncoming != "allow" {
+		t.Errorf("incoming must remain untouched after Teardown, got %q", mock.defaultIncoming)
 	}
 }
 

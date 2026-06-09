@@ -1231,17 +1231,52 @@ func statefulFirewallMock(t *testing.T) *bool {
 	origEnable := firewallEnable
 	origEnableSimple := firewallEnableSimple
 	origDisable := firewallDisable
+	origReconcile := firewallReconcile
 	isFirewallActive = func() bool { return active }
 	firewallEnable = func(cfg *firewall.KillswitchConfig) error { active = true; return nil }
 	firewallEnableSimple = func() error { active = true; return nil }
 	firewallDisable = func() error { active = false; return nil }
+	firewallReconcile = func(s firewall.State) error { active = s.Killswitch; return nil }
 	t.Cleanup(func() {
 		isFirewallActive = origIsActive
 		firewallEnable = origEnable
 		firewallEnableSimple = origEnableSimple
 		firewallDisable = origDisable
+		firewallReconcile = origReconcile
 	})
 	return &active
+}
+
+// firewallReconcileMock stubs the single Reconcile path: it records the last
+// desired State, always succeeds, and drives the firewall-state reads
+// (isFirewallActive, LAN/IPv6 active) from that State so a toggle's optimistic
+// flip sticks and subsequent reads reflect what was applied. Returns the
+// captured State for assertions. This is the mock for the Reconcile-based
+// toggle handlers.
+func firewallReconcileMock(t *testing.T) *firewall.State {
+	t.Helper()
+	var last firewall.State
+	origReconcile := firewallReconcile
+	origActive := isFirewallActive
+	origIsLB := firewallIsLANBlockActive
+	origIsST := firewallIsLANStealthActive
+	origIsV6 := firewallIsIPv6Disabled
+	origGetPhys := firewallGetPhysicalInterface
+	firewallReconcile = func(s firewall.State) error { last = s; return nil }
+	isFirewallActive = func() bool { return last.Killswitch }
+	firewallIsLANBlockActive = func() bool { return last.LANMode == firewall.LANBlock }
+	firewallIsLANStealthActive = func() bool { return last.LANMode == firewall.LANStealth }
+	firewallIsIPv6Disabled = func() bool { return last.IPv6Blocked }
+	firewallGetPhysicalInterface = func() (string, string, error) { return "wlan0", "192.168.1.1", nil }
+	t.Cleanup(func() {
+		firewallReconcile = origReconcile
+		isFirewallActive = origActive
+		firewallIsLANBlockActive = origIsLB
+		firewallIsLANStealthActive = origIsST
+		firewallIsIPv6Disabled = origIsV6
+		firewallGetPhysicalInterface = origGetPhys
+	})
+	return &last
 }
 
 func TestDashboardKillswitchToggle(t *testing.T) {
@@ -1276,22 +1311,11 @@ func TestDashboardKillswitchToggle(t *testing.T) {
 func TestDashboardKillswitchToggleConnected(t *testing.T) {
 	mockConnected(t)
 	d := newTestDashboard(t)
+	last := firewallReconcileMock(t)
 	d.focused = true
 	d.connected = true
 	d.activeCol = 1
 	d.cfg.LastConnectedServer = "US-NY#42"
-
-	// Stateful mock so isFirewallActive reflects post-toggle firewall state,
-	// and override firewallEnable to also flip a "called" flag for assertion.
-	active := statefulFirewallMock(t)
-	called := false
-	origEnable := firewallEnable
-	firewallEnable = func(cfg *firewall.KillswitchConfig) error {
-		called = true
-		*active = true
-		return nil
-	}
-	t.Cleanup(func() { firewallEnable = origEnable })
 
 	idx := findDashActionRight(d, "killswitch")
 	d.rightCol = idx
@@ -1301,8 +1325,13 @@ func TestDashboardKillswitchToggleConnected(t *testing.T) {
 	if !d.killswitch {
 		t.Error("Killswitch should be ON")
 	}
-	if !called {
-		t.Error("firewallEnable should have been called for connected state")
+	// The toggle hands Reconcile a full state with the killswitch on and the
+	// connection flagged (so it builds the full killswitch, endpoint + reject).
+	if !last.Killswitch {
+		t.Error("Reconcile should have been called with Killswitch=true")
+	}
+	if !last.Connected {
+		t.Error("Reconcile should reflect the live connection (Connected=true)")
 	}
 }
 
@@ -1503,42 +1532,9 @@ func TestDashboardIPv6Toggle(t *testing.T) {
 	}
 }
 
-// statefulLANMock wires LAN block + LAN stealth enable/disable ops against
-// shared bools so refresh() reports post-op state correctly.
-// Returns pointers to (lanBlock, stealth) booleans for assertions.
-func statefulLANMock(t *testing.T) (*bool, *bool) {
-	t.Helper()
-	lanBlock := false
-	stealth := false
-	origEnableLB := firewallEnableLANBlock
-	origDisableLB := firewallDisableLANBlock
-	origIsLB := firewallIsLANBlockActive
-	origEnableST := firewallEnableLANStealth
-	origDisableST := firewallDisableLANStealth
-	origIsST := firewallIsLANStealthActive
-	origGetPhys := firewallGetPhysicalInterface
-	firewallEnableLANBlock = func(string, string, string, string) error { lanBlock = true; return nil }
-	firewallDisableLANBlock = func() error { lanBlock = false; return nil }
-	firewallIsLANBlockActive = func() bool { return lanBlock }
-	firewallEnableLANStealth = func() error { stealth = true; return nil }
-	firewallDisableLANStealth = func() error { stealth = false; return nil }
-	firewallIsLANStealthActive = func() bool { return stealth }
-	firewallGetPhysicalInterface = func() (string, string, error) { return "wlan0", "192.168.1.1", nil }
-	t.Cleanup(func() {
-		firewallEnableLANBlock = origEnableLB
-		firewallDisableLANBlock = origDisableLB
-		firewallIsLANBlockActive = origIsLB
-		firewallEnableLANStealth = origEnableST
-		firewallDisableLANStealth = origDisableST
-		firewallIsLANStealthActive = origIsST
-		firewallGetPhysicalInterface = origGetPhys
-	})
-	return &lanBlock, &stealth
-}
-
 func TestDashboardLocalNetworkCycle(t *testing.T) {
 	d := newTestDashboard(t)
-	_, stealth := statefulLANMock(t)
+	last := firewallReconcileMock(t)
 	d.focused = true
 	d.connected = true
 	d.activeCol = 1
@@ -1557,125 +1553,88 @@ func TestDashboardLocalNetworkCycle(t *testing.T) {
 	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	drainFirewallCmd(t, d, cmd)
 	if d.lanBlock || !d.stealthMode {
-		t.Errorf("Allow→Stealth: want lanBlock=false/stealth=true, got %v/%v",
-			d.lanBlock, d.stealthMode)
+		t.Errorf("Allow→Stealth flags: %v/%v", d.lanBlock, d.stealthMode)
 	}
-	if !*stealth {
-		t.Error("firewallEnableLANStealth should have been called")
+	if last.LANMode != firewall.LANStealth {
+		t.Errorf("Reconcile LANMode want Stealth, got %d", last.LANMode)
 	}
 
 	// Stealth → Block
 	_, cmd = d.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	drainFirewallCmd(t, d, cmd)
 	if !d.lanBlock || d.stealthMode {
-		t.Errorf("Stealth→Block: want lanBlock=true/stealth=false, got %v/%v",
-			d.lanBlock, d.stealthMode)
+		t.Errorf("Stealth→Block flags: %v/%v", d.lanBlock, d.stealthMode)
 	}
-	if *stealth {
-		t.Error("firewallDisableLANStealth should have been called")
+	if last.LANMode != firewall.LANBlock {
+		t.Errorf("Reconcile LANMode want Block, got %d", last.LANMode)
 	}
 
 	// Block → Allow
 	_, cmd = d.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	drainFirewallCmd(t, d, cmd)
 	if d.lanBlock || d.stealthMode {
-		t.Errorf("Block→Allow: want lanBlock=false/stealth=false, got %v/%v",
-			d.lanBlock, d.stealthMode)
+		t.Errorf("Block→Allow flags: %v/%v", d.lanBlock, d.stealthMode)
+	}
+	if last.LANMode != firewall.LANAllow {
+		t.Errorf("Reconcile LANMode want Allow, got %d", last.LANMode)
 	}
 }
 
-func TestDashboardLocalNetworkAlwaysReappliesKillswitch(t *testing.T) {
+// Cycling LAN while the killswitch is on hands Reconcile a full state with
+// Killswitch=true every time, so the rebuild re-lays the killswitch (and its
+// reject after the new LAN allow-outs) — there's no separate "reapply" step.
+func TestDashboardLocalNetworkCycleWithKillswitchOn(t *testing.T) {
 	mockConnected(t)
 	d := newTestDashboard(t)
-	statefulLANMock(t)
+	last := firewallReconcileMock(t)
 	d.focused = true
 	d.connected = true
 	d.activeCol = 1
 	d.killswitch = true
 	d.cfg.LastConnectedServer = "US-NY#42"
-	// Persist to disk so refresh() → cfg.Reload() doesn't wipe it between transitions.
-	// The handler now skips reapply when LastConnectedServer is empty (EnableSimple
-	// state — Enable would silently break DNS).
 	if err := d.cfg.Save(); err != nil {
 		t.Fatalf("save cfg: %v", err)
 	}
-
-	// Track firewallEnable calls (override firewallEnable but keep isFirewallActive
-	// reporting true so the cycle handler's reapply branch runs).
-	enableCalls := 0
-	origEnable := firewallEnable
-	firewallEnable = func(*firewall.KillswitchConfig) error { enableCalls++; return nil }
-	t.Cleanup(func() { firewallEnable = origEnable })
-
-	origActive := isFirewallActive
-	isFirewallActive = func() bool { return true }
-	t.Cleanup(func() { isFirewallActive = origActive })
 
 	idx := findDashActionRight(d, "local-network")
 	if idx < 0 {
 		t.Fatal("local-network action not found")
 	}
 	d.rightCol = idx
-
-	// Start at Allow mode (cached flags both false).
 	d.lanBlock = false
 	d.stealthMode = false
 
-	// Allow → Stealth: LAN block stays false, so an overly-strict reapply
-	// guard would NOT fire. New code always reapplies when KS is active.
-	enableCalls = 0
-	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	drainFirewallCmd(t, d, cmd)
-	if enableCalls != 1 {
-		t.Errorf("Allow→Stealth: firewallEnable called %d times, want 1", enableCalls)
-	}
-
-	// Stealth → Block
-	enableCalls = 0
-	_, cmd = d.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	drainFirewallCmd(t, d, cmd)
-	if enableCalls != 1 {
-		t.Errorf("Stealth→Block: firewallEnable called %d times, want 1", enableCalls)
-	}
-
-	// Block → Allow
-	enableCalls = 0
-	_, cmd = d.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	drainFirewallCmd(t, d, cmd)
-	if enableCalls != 1 {
-		t.Errorf("Block→Allow: firewallEnable called %d times, want 1", enableCalls)
+	for _, want := range []firewall.LANMode{firewall.LANStealth, firewall.LANBlock, firewall.LANAllow} {
+		_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		drainFirewallCmd(t, d, cmd)
+		if !last.Killswitch {
+			t.Error("Reconcile must keep Killswitch=true while cycling LAN")
+		}
+		if last.LANMode != want {
+			t.Errorf("Reconcile LANMode want %d, got %d", want, last.LANMode)
+		}
 	}
 }
 
-// TestDashboardLocalNetworkSkipsKSReapplyInSimpleState verifies the fix for
-// the EnableSimple-state DNS-break bug: when killswitch was enabled before
-// any connection (LastConnectedServer is ""), cycling LAN modes must NOT
-// call firewallEnable — that would replace the simple killswitch with a
-// "full" one whose buildKillswitchConfig returns empty DNS, breaking
-// system-wide DNS resolution.
-func TestDashboardLocalNetworkSkipsKSReapplyInSimpleState(t *testing.T) {
-	mockConnected(t)
+// In the simple-killswitch state (killswitch on, never connected), cycling LAN
+// hands Reconcile Connected=false, so it builds the simple killswitch (no
+// endpoint/reject). The old reapply-breaks-DNS bug is structurally gone — the
+// full rebuild always lays down a correct, complete ruleset.
+func TestDashboardLocalNetworkCycleSimpleKillswitch(t *testing.T) {
 	d := newTestDashboard(t)
-	statefulLANMock(t)
+	last := firewallReconcileMock(t)
+	origConn := isWGConnected
+	isWGConnected = func(string) bool { return false } // never connected
+	t.Cleanup(func() { isWGConnected = origConn })
+
 	d.focused = true
-	d.connected = true
 	d.activeCol = 1
 	d.killswitch = true
-	// Critical: LastConnectedServer is empty — never connected.
 	d.cfg.LastConnectedServer = ""
 	if err := d.cfg.Save(); err != nil {
 		t.Fatalf("save cfg: %v", err)
 	}
 
-	enableCalls := 0
-	origEnable := firewallEnable
-	firewallEnable = func(*firewall.KillswitchConfig) error { enableCalls++; return nil }
-	t.Cleanup(func() { firewallEnable = origEnable })
-
-	origActive := isFirewallActive
-	isFirewallActive = func() bool { return true }
-	t.Cleanup(func() { isFirewallActive = origActive })
-
 	idx := findDashActionRight(d, "local-network")
 	if idx < 0 {
 		t.Fatal("local-network action not found")
@@ -1684,18 +1643,19 @@ func TestDashboardLocalNetworkSkipsKSReapplyInSimpleState(t *testing.T) {
 	d.lanBlock = false
 	d.stealthMode = false
 
-	// Allow → Stealth: must NOT reapply ks (would break DNS).
 	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	drainFirewallCmd(t, d, cmd)
-	if enableCalls != 0 {
-		t.Errorf("Allow→Stealth in EnableSimple state: firewallEnable called %d times, want 0", enableCalls)
+	if !last.Killswitch {
+		t.Error("Reconcile should keep Killswitch=true")
+	}
+	if last.Connected {
+		t.Error("never-connected → Reconcile should get Connected=false (simple killswitch)")
 	}
 }
 
 func TestDashboardLocalNetworkBlockEnablesLANBlock(t *testing.T) {
-	mockConnected(t)
 	d := newTestDashboard(t)
-	lanBlock, _ := statefulLANMock(t)
+	last := firewallReconcileMock(t)
 	d.focused = true
 	d.connected = true
 	d.activeCol = 1
@@ -1714,8 +1674,8 @@ func TestDashboardLocalNetworkBlockEnablesLANBlock(t *testing.T) {
 	// Stealth → Block
 	_, cmd := d.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	drainFirewallCmd(t, d, cmd)
-	if !*lanBlock {
-		t.Error("firewallEnableLANBlock should have been called in Block mode")
+	if last.LANMode != firewall.LANBlock {
+		t.Errorf("Stealth→Block: Reconcile LANMode want Block, got %d", last.LANMode)
 	}
 }
 

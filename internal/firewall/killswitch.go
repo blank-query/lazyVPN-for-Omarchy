@@ -29,6 +29,7 @@ func defaultUFWStateMarker() string {
 	return filepath.Join(home, ".config", "lazyvpn", ".ufw-enabled-by-lazyvpn")
 }
 
+
 // ufwIsEnabled reports whether UFW is currently active.
 func ufwIsEnabled() bool {
 	out, err := runUFW.Run("status")
@@ -278,8 +279,10 @@ func enableLocked(cfg *KillswitchConfig) error {
 	}
 
 	// Activate UFW (no-op if already active) so the rules actually enforce, then
-	// flip BOTH defaults to deny — force everything through the tunnel. All the
-	// allow rules are already in place, so the VPN/LAN survive the transition.
+	// flip the OUTGOING default to deny — force outbound through the tunnel. The
+	// killswitch is outbound-only: it never touches the incoming policy. Inbound
+	// is owned by the Local Network layer (Stealth/Block deny it; Allow permits
+	// LAN in), and unsolicited WAN inbound can't reach a NAT'd host anyway.
 	if err := ensureUFWEnabled(); err != nil {
 		return err
 	}
@@ -295,7 +298,6 @@ func enableLocked(cfg *KillswitchConfig) error {
 // Disable deactivates the killswitch (allows all traffic).
 func Disable() error {
 	ufwMu.Lock()
-	defer ufwMu.Unlock()
 
 	log("Disabling killswitch")
 
@@ -304,12 +306,30 @@ func Disable() error {
 	}
 
 	if err := addRule("default", "allow", "outgoing"); err != nil {
+		ufwMu.Unlock()
 		return fmt.Errorf("ufw default allow outgoing: %w", err)
 	}
+
+	// Outbound-only killswitch — it never touched the incoming policy, so
+	// there's nothing to restore here.
 
 	// If lazyvpn was the one that turned UFW on, and nothing else needs it
 	// anymore, turn it back off so we leave the system as we found it.
 	maybeRestoreUFW()
+
+	ufwMu.Unlock()
+
+	// The killswitch and Stealth both add the identical DHCP-in rule; UFW
+	// dedups by match (ignoring the comment), so the killswitch's tag owned the
+	// single rule and the deleteRulesByTag above just removed it — orphaning
+	// Stealth's need for DHCP-in. Re-assert Stealth (only it adds a colliding
+	// DHCP-in) so its full rule set is restored under the st tag. Done after
+	// releasing ufwMu because EnableLANStealth takes the lock itself.
+	if IsLANStealthActive() {
+		if err := EnableLANStealth(); err != nil {
+			log("Warning: failed to re-assert Stealth after killswitch disable: %v", err)
+		}
+	}
 
 	log("Killswitch disabled successfully")
 	return nil
@@ -387,7 +407,9 @@ func EnableSimple() error {
 	// no physical-interface reject (there's no tunnel to prevent leaks around),
 	// so the default-deny is the only thing the LAN allow rules must beat.
 
-	// Activate UFW, then deny BOTH directions by default.
+	// Activate UFW, then deny OUTGOING by default — with no tunnel connected,
+	// nothing goes out except loopback and the Local Network layer's allowances.
+	// Outbound-only: inbound stays the user's policy, owned by the LAN layer.
 	if err := ensureUFWEnabled(); err != nil {
 		return err
 	}
@@ -545,8 +567,16 @@ net.ipv6.conf.lo.disable_ipv6 = 1
 		}
 	}
 
-	// Layer 3: UFW deny rules for all IPv6 traffic (both directions)
+	// Layer 3: UFW deny rules for all IPv6 traffic (both directions). IPv6
+	// protection is an independent UFW layer (like the killswitch and Local
+	// Network), so it activates UFW itself — otherwise these deny rules sit on
+	// an inactive firewall and never enforce. The kernel-level disable above is
+	// the primary block; these UFW rules are defense-in-depth, so an activation
+	// failure is a warning, not fatal.
 	ufwMu.Lock()
+	if err := ensureUFWEnabled(); err != nil {
+		log("Warning: failed to activate UFW for IPv6 block rules: %v", err)
+	}
 	if err := addRule("deny", "out", "to", "::/0", "comment", TagIPv6); err != nil {
 		log("Warning: failed to add IPv6 outbound block rule: %v", err)
 	}
@@ -603,11 +633,15 @@ func EnableIPv6() error {
 		log("Warning: failed to remove persistent IPv6 sysctl config: %v", err)
 	}
 
-	// Layer 3: Remove UFW IPv6 block rule
+	// Layer 3: Remove UFW IPv6 block rule. If IPv6 protection was the only
+	// lazyvpn layer keeping UFW active, release it — mirrors the killswitch and
+	// Local Network teardown. maybeRestoreUFW only disables UFW when lazyvpn
+	// enabled it (marker present) AND no other lazyvpn tags remain.
 	ufwMu.Lock()
 	if err := deleteRulesByTag(TagIPv6); err != nil {
 		log("Warning: failed to remove IPv6 block rules: %v", err)
 	}
+	maybeRestoreUFW()
 	ufwMu.Unlock()
 
 	if len(procErrs) > 0 {
@@ -653,39 +687,10 @@ func EnableLANStealth() error {
 		return err
 	}
 
-	// Allow DHCP inbound on physical interface
-	if err := addRule("allow", "in", "on", physIface, "proto", "udp", "from", "any", "port", "67:68", "comment", TagStealth); err != nil {
+	// Emit via the shared builder so the granular path and Reconcile produce
+	// identical Stealth rules (DHCP-in, allow-out to LAN, broad deny-in).
+	if err := emitLANRules(State{LANMode: LANStealth}, physIface); err != nil {
 		return err
-	}
-
-	// Allow OUTBOUND to private ranges — an explicit, inspectable rule so the
-	// "outbound LAN works" promise doesn't silently rely on UFW's default
-	// outgoing policy. It also carries a lower rule number than the killswitch's
-	// physical-interface reject, so LAN egress survives when the killswitch is
-	// engaged (first-match).
-	for _, cidr := range privateCIDRsV4 {
-		if err := addRule("allow", "out", "to", cidr, "comment", TagStealth); err != nil {
-			return err
-		}
-	}
-	for _, cidr := range privateCIDRsV6 {
-		if err := addRule("allow", "out", "to", cidr, "comment", TagStealth); err != nil {
-			return err
-		}
-	}
-
-	// Deny inbound from private IPv4 ranges on physical interface
-	for _, cidr := range privateCIDRsV4 {
-		if err := addRule("deny", "in", "on", physIface, "from", cidr, "comment", TagStealth); err != nil {
-			return err
-		}
-	}
-
-	// Deny inbound from private IPv6 ranges on physical interface
-	for _, cidr := range privateCIDRsV6 {
-		if err := addRule("deny", "in", "on", physIface, "from", cidr, "comment", TagStealth); err != nil {
-			return err
-		}
 	}
 
 	success = true
@@ -746,91 +751,23 @@ func EnableLANBlock(vpnInterface, endpoint, gateway, dns string) error {
 		return err
 	}
 
-	// Allow loopback
-	if err := addRule("allow", "out", "on", "lo", "comment", TagLANBlock); err != nil {
+	// Emit via the shared builder so the granular path and Reconcile produce
+	// identical Block rules (loopback/gateway/tunnel/endpoint/DNS/DHCP allows,
+	// deny LAN egress, broad deny-in).
+	physIface, gw, _ := GetPhysicalInterface()
+	if gateway == "" {
+		gateway = gw
+	}
+	s := State{
+		LANMode:       LANBlock,
+		InterfaceName: vpnInterface,
+		Endpoint:      endpoint,
+		DNS:           dns,
+		Gateway:       gateway,
+		Connected:     vpnInterface != "",
+	}
+	if err := emitLANRules(s, physIface); err != nil {
 		return err
-	}
-
-	// Allow VPN tunnel traffic
-	if vpnInterface != "" {
-		if err := addRule("allow", "out", "on", vpnInterface, "comment", TagLANBlock); err != nil {
-			return err
-		}
-	}
-
-	// Allow VPN endpoint (handshake)
-	if endpoint != "" && validateIP(endpoint) {
-		if err := addRule("allow", "out", "to", endpoint, "comment", TagLANBlock); err != nil {
-			return err
-		}
-	}
-
-	// Allow gateway
-	if gateway != "" && validateIP(gateway) {
-		if err := addRule("allow", "out", "to", gateway+"/32", "comment", TagLANBlock); err != nil {
-			return err
-		}
-	}
-
-	// Allow DNS servers (VPN DNS may be on a private IP like 10.2.0.1)
-	if dns != "" {
-		for _, dnsAddr := range strings.Split(dns, ",") {
-			dnsAddr = strings.TrimSpace(dnsAddr)
-			if dnsAddr == "" {
-				continue
-			}
-			if !validateIP(dnsAddr) {
-				log("Skipping invalid DNS address: %s", dnsAddr)
-				continue
-			}
-			if err := addRule("allow", "out", "proto", "udp", "to", dnsAddr, "port", "53", "comment", TagLANBlock); err != nil {
-				return err
-			}
-			if err := addRule("allow", "out", "proto", "tcp", "to", dnsAddr, "port", "53", "comment", TagLANBlock); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Allow DHCP broadcast
-	if err := addRule("allow", "out", "proto", "udp", "to", "any", "port", "67:68", "comment", TagLANBlock); err != nil {
-		return err
-	}
-
-	// Deny outbound to private IPv4 ranges
-	for _, cidr := range privateCIDRsV4 {
-		if err := addRule("deny", "out", "to", cidr, "comment", TagLANBlock); err != nil {
-			return err
-		}
-	}
-
-	// Deny outbound to private IPv6 ranges
-	for _, cidr := range privateCIDRsV6 {
-		if err := addRule("deny", "out", "to", cidr, "comment", TagLANBlock); err != nil {
-			return err
-		}
-	}
-
-	// Allow all inbound on VPN interface before denying private CIDRs,
-	// since VPN internal addresses (e.g. 10.2.0.1) are private IPs.
-	if vpnInterface != "" {
-		if err := addRule("allow", "in", "on", vpnInterface, "comment", TagLANBlock); err != nil {
-			return err
-		}
-	}
-
-	// Deny inbound from private IPv4 ranges
-	for _, cidr := range privateCIDRsV4 {
-		if err := addRule("deny", "in", "from", cidr, "comment", TagLANBlock); err != nil {
-			return err
-		}
-	}
-
-	// Deny inbound from private IPv6 ranges
-	for _, cidr := range privateCIDRsV6 {
-		if err := addRule("deny", "in", "from", cidr, "comment", TagLANBlock); err != nil {
-			return err
-		}
 	}
 
 	success = true
@@ -900,30 +837,10 @@ func EnableLANAllow() error {
 		return err
 	}
 
-	// Allow OUTBOUND to private ranges (dest-based, survives killswitch reject).
-	for _, cidr := range privateCIDRsV4 {
-		if err := addRule("allow", "out", "to", cidr, "comment", TagLANAllow); err != nil {
-			return err
-		}
-	}
-	for _, cidr := range privateCIDRsV6 {
-		if err := addRule("allow", "out", "to", cidr, "comment", TagLANAllow); err != nil {
-			return err
-		}
-	}
-
-	// Allow INBOUND from private ranges on the physical interface. Scoped to
-	// physIface so it grants LAN access without opening the VPN tunnel
-	// interface (whose internal addresses are also private IPs).
-	for _, cidr := range privateCIDRsV4 {
-		if err := addRule("allow", "in", "on", physIface, "from", cidr, "comment", TagLANAllow); err != nil {
-			return err
-		}
-	}
-	for _, cidr := range privateCIDRsV6 {
-		if err := addRule("allow", "in", "on", physIface, "from", cidr, "comment", TagLANAllow); err != nil {
-			return err
-		}
+	// Emit via the shared builder so the granular path and Reconcile produce
+	// identical Allow rules (allow in + out to/from private ranges).
+	if err := emitLANRules(State{LANMode: LANAllow}, physIface); err != nil {
+		return err
 	}
 
 	success = true
@@ -965,10 +882,9 @@ func Teardown() error {
 	log("Tearing down all LazyVPN firewall rules")
 
 	// Restore the OUTGOING default to "allow" — the killswitch flips it to
-	// "deny" when active, so we reset what we changed. We deliberately do NOT
-	// touch the INCOMING default: the killswitch never sets it explicitly (it
-	// relies on UFW's own deny-incoming default when we activate UFW), so a
-	// user who runs "deny incoming" keeps it.
+	// "deny" when active, so we reset what we changed. We never touch the
+	// INCOMING default (the killswitch is outbound-only), so a user who set
+	// "deny incoming" themselves keeps it.
 	addRule("default", "allow", "outgoing")
 
 	// Delete all tagged rules
