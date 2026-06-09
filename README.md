@@ -85,7 +85,7 @@ Press `SUPER+SHIFT+L` to launch, or run `lazyvpn` from a terminal.
 
 * **Compiled Go Binary:** Fast startup with no shell overhead or external dependencies.
 * **Integrated TUI:** Full Bubbletea terminal interface — no external terminal tools like fzf or Walker needed.
-* **UFW Killswitch:** Firewall-based killswitch with LAN block, stealth, and IPv6 leak protection.
+* **UFW Killswitch:** Firewall-based killswitch that forces all traffic through the tunnel — independent of the Local Network layer (Allow / Stealth / Block) and IPv6 leak protection, which stand on their own.
 * **Health Monitoring:** Real-time connection health scoring with auto-recovery and automatic failover.
 * **Built-in Diagnostics:** Speed test, DNS/IP leak test, and full security audit — all inside the TUI.
 * **Keyboard Centric:** Navigate, filter, and connect entirely with hotkeys.
@@ -119,7 +119,7 @@ The installer runs through 11 steps:
 1. **Install binary** to `~/.local/bin/lazyvpn`
 2. **Create config directories** (`~/.config/lazyvpn/`)
 3. **WireGuard interface name** — choose a name for the VPN interface (default: `wg0`)
-4. **Configure VPN operations** — optional passwordless sudo for specific VPN commands (`ufw`, `ip`, `resolvectl`), set `CAP_NET_ADMIN` + `CAP_NET_RAW` file capabilities, and an optional system-wide IPv6 block
+4. **Configure VPN operations** — optional passwordless sudo for specific VPN commands (`ufw`, `ip`, `resolvectl`), set `CAP_NET_ADMIN` + `CAP_NET_RAW` file capabilities, an optional system-wide IPv6 block, and the default Local Network mode (Stealth — outbound LAN works, inbound blocked; the exact UFW rules are shown before they're applied)
 5. **Hyprland keybinding** — adds `SUPER+SHIFT+L` shortcut and floating window rules (Omarchy only)
 6. **Legacy menu cleanup** — removes old bash-version menu entries if present (Omarchy only)
 7. **Waybar module** — adds a status indicator that shows connection state, server, and health (Omarchy only)
@@ -263,7 +263,7 @@ Your sensitive data stays in your control.
 
 The sudoers configuration (`/etc/sudoers.d/lazyvpn`) grants passwordless execution **only** for a specific allowlist:
 
-- `ufw` — firewall management (killswitch, LAN block, stealth, IPv6)
+- `ufw` — firewall management (killswitch, Local Network allow/stealth/block, IPv6)
 - `ip` — interface, address, and route management
 - `resolvectl` — DNS configuration via systemd-resolved
 - `sysctl` — IPv6 kernel parameter toggle (scoped to lazyvpn sysctl file)
@@ -367,7 +367,7 @@ When connected, the dashboard shows real-time information:
 **Dashboard Toggles:**
 | Toggle | Options | Description |
 |--------|---------|-------------|
-| Killswitch | On / Off | Block all traffic if VPN drops |
+| Killswitch | On / Off | Force all traffic through the tunnel; block any leak |
 | KS on Disconnect | Auto / Prompt / Never | Killswitch behavior when you manually disconnect |
 | IPv6 Leak Protection | On / Off | Disable IPv6 to prevent leaks |
 | Local Network | Allow / Stealth / Block | LAN access mode (see below) |
@@ -377,9 +377,9 @@ When connected, the dashboard shows real-time information:
 | Show Session Total | On / Off | Show total bytes transferred |
 | Reset ISP Baseline | — | Clear ISP fingerprint for leak detection |
 
-**LAN Modes:**
-- **Allow:** Full LAN access (printers, file shares, NAS, etc.)
-- **Stealth:** Outbound LAN works, inbound blocked (coffee shop mode)
+**LAN Modes:** Local Network is a standing setting, independent of the killswitch — it stays in effect whether or not the killswitch is on. Each mode lays down its own explicit UFW rules; **Stealth is the default** (set at install). The gateway stays reachable in every mode.
+- **Allow:** Full LAN access — inbound + outbound (printers, file shares, NAS, casting)
+- **Stealth:** Outbound LAN works, inbound blocked (coffee-shop mode)
 - **Block:** All LAN traffic blocked in both directions (maximum isolation)
 
 ### Settings Screen
@@ -403,7 +403,7 @@ The Settings screen is organized in a two-column layout with 5 sections:
 
 ### 🛡️ Protection & Automation
 
-* **Firewall Killswitch:** Blocks all non-VPN traffic using UFW deny rules. If the killswitch is still active at shutdown — because you powered off while connected, set "KS on Disconnect" to Never, or declined the disable prompt — the rules persist across reboots. This means your traffic is never exposed, even during an unexpected restart. Combined with Autoconnect, your VPN reconnects on boot while the killswitch keeps you protected during the brief window before the tunnel is up. Configurable behavior on manual disconnect (Auto / Prompt / Never).
+* **Firewall Killswitch:** Forces all traffic through the tunnel using UFW deny rules, rejecting anything that would leak out the physical interface. LAN traffic is governed separately by the independent Local Network setting (Allow / Stealth / Block), not by the killswitch. If the killswitch is still active at shutdown — because you powered off while connected, set "KS on Disconnect" to Never, or declined the disable prompt — the rules persist across reboots. This means your traffic is never exposed, even during an unexpected restart. Combined with Autoconnect, your VPN reconnects on boot while the killswitch keeps you protected during the brief window before the tunnel is up. Configurable behavior on manual disconnect (Auto / Prompt / Never).
 * **Auto-Recover:** Background daemon monitors connection health every 5 seconds and reconnects automatically.
 * **Auto-Failover:** If a server goes down, automatically switches to the next best server.
 * **Auto-Check Updates:** Opt-in daily check for new releases on GitHub. Notifies you in the TUI nav bar when an update is available. Nothing is downloaded or installed without your confirmation.
@@ -439,7 +439,7 @@ LazyVPN exclusively supports **WireGuard**:
 | Component | Implementation |
 |-----------|---------------|
 | **Network** | Native netlink + wgctrl (not systemd-networkd, not wg-quick) |
-| **Firewall** | UFW with tagged rules (`lazyvpn:ks`, `lazyvpn:lb`, `lazyvpn:st`, `lazyvpn:v6`) |
+| **Firewall** | UFW with tagged rules (`lazyvpn:ks` killswitch, `lazyvpn:la`/`lazyvpn:st`/`lazyvpn:lb` Local Network allow/stealth/block, `lazyvpn:v6` IPv6) |
 | **DNS** | systemd-resolved integration via `resolvectl` |
 | **Privilege** | `CAP_NET_ADMIN` + `CAP_NET_RAW` file capabilities; sudoers for UFW |
 | **TUI** | [Bubbletea](https://github.com/charmbracelet/bubbletea) with Lip Gloss styling |

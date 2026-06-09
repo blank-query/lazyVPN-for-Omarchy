@@ -2,6 +2,10 @@
 
 All notable changes to LazyVPN are documented here.
 
+## 1.0.3
+
+- Docs: refresh the README to match the 1.0.2 model — the killswitch (force traffic through the tunnel) and Local Network (Allow/Stealth/Block) are independent layers, Stealth is the install-time default, and the tagged-rules list now includes `lazyvpn:la`.
+
 ## 1.0.2
 
 ### Local Network and killswitch are now fully independent layers
