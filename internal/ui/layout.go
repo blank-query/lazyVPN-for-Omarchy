@@ -304,21 +304,10 @@ func (l *Layout) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		l.nav.SetUpdateAvailable(msg.Release)
 		return l, nil
 
-	case ManualUpdateCheckMsg:
-		if msg.Err != nil {
-			l.footer.OverlayText = "Update check failed: " + msg.Err.Error()
-			l.footer.OverlayIsError = true
-			return l, nil
-		}
-		if msg.Release != nil {
-			l.nav.SetUpdateAvailable(msg.Release)
-			l.footer.OverlayText = "Update available: " + msg.Release.TagName + " — run 'lazyvpn update' to install"
-			l.footer.OverlayIsError = false
-			return l, nil
-		}
-		l.footer.OverlayText = "You're on the latest version (" + Version + ")"
-		l.footer.OverlayIsError = false
-		return l, nil
+	// ManualUpdateCheckMsg is intentionally NOT handled here — it falls through
+	// to the content view (Settings), which sets its statusText with the result.
+	// The footer shows the active view's CurrentDescription (= statusText), so
+	// handling it here would be overwritten on the next render.
 
 	case RunUpdateMsg:
 		rel := msg.Release

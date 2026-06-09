@@ -345,6 +345,24 @@ func (m *Settings) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case ManualUpdateCheckMsg:
+		// Result of "Check for Updates Now". statusText feeds CurrentDescription,
+		// which the footer renders — so this is what the user actually sees.
+		if msg.Err != nil {
+			m.statusText = "Update check failed: " + msg.Err.Error()
+			m.statusIsError = true
+			return m, nil
+		}
+		if msg.Release != nil {
+			m.statusText = "Update available: " + msg.Release.TagName + " — run 'lazyvpn update' to install"
+			m.statusIsError = false
+			rel := msg.Release
+			// Also raise the nav banner (handled in Layout).
+			return m, func() tea.Msg { return UpdateAvailableMsg{Release: rel} }
+		}
+		m.statusText = "You're on the latest version (" + Version + ")"
+		m.statusIsError = false
+		return m, nil
 	case tea.KeyMsg:
 		m.statusText = ""
 		m.statusIsError = false

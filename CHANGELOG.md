@@ -2,6 +2,10 @@
 
 All notable changes to LazyVPN are documented here.
 
+## 1.0.1
+
+- Fix the **Check for Updates Now** action: the result (up to date / update available / error) now displays in the footer instead of getting stuck on "Checking…".
+
 ## 1.0.0 — Go rewrite (initial release)
 
 LazyVPN is now a single Go binary. There is **no upgrade path** from the

@@ -925,6 +925,13 @@ func TestSettingsManualUpdateCheck(t *testing.T) {
 		if msg.Release == nil || msg.Release.TagName != "9.9.9" {
 			t.Errorf("expected release 9.9.9, got %+v", msg.Release)
 		}
+		// The result must surface via CurrentDescription (what the footer
+		// renders) — this is the bit that was previously broken (the result
+		// went to the layout footer and got overwritten by stale statusText).
+		s.Update(msg)
+		if desc := s.CurrentDescription(); !strings.Contains(desc, "9.9.9") {
+			t.Errorf("after result, CurrentDescription should show the new version; got %q", desc)
+		}
 		return
 	}
 	t.Fatal("check-updates item not found in Automation (left) column")
