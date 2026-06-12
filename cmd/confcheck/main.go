@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/blank-query/lazyVPN-for-Omarchy/internal/provider"
 	"github.com/blank-query/lazyVPN-for-Omarchy/internal/wireguard"
 )
 
@@ -58,13 +59,43 @@ func main() {
 		fmt.Printf("  ✗ REJECTED (private key): %v\n", err)
 		return
 	}
+	// Detect the provider before zeroing keys (detection uses DNS/endpoint/
+	// address, never the key bytes; ZeroKeys leaves those fields intact anyway).
+	prov := provider.DetectProvider(cfg, path)
 	cfg.ZeroKeys()
 	fmt.Println("  ✓ VALID — LazyVPN accepts this config.")
 	fmt.Println()
-	fmt.Println("Note: if your provider isn't one LazyVPN auto-detects (ProtonVPN, Mullvad,")
-	fmt.Println("IVPN, AirVPN, NordVPN, Surfshark, Windscribe, FastestVPN), the dynamic server")
-	fmt.Println("browser can't list its servers — but a VALID config still works via")
-	fmt.Println("\"Import WireGuard Config\" (manual import, one server per file).")
+	printProviderVerdict(prov)
+}
+
+// printProviderVerdict explains whether the (valid) config's provider is one the
+// dynamic server browser supports, and — if not — exactly what that means and
+// what to do instead. The provider id is safe to print; no config values are.
+func printProviderVerdict(prov string) {
+	fmt.Println(strings.Repeat("-", 68))
+	fmt.Println("Dynamic server browser support:")
+	if prov != "" {
+		fmt.Printf("  ✓ Provider detected: %s — SUPPORTED.\n", prov)
+		fmt.Println("    LazyVPN can fetch this provider's full server list and browse it in-app")
+		fmt.Println("    via \"Set Up Provider\". (ProtonVPN is the fully-verified provider; the")
+		fmt.Println("    others are wired but experimental.)")
+		return
+	}
+	fmt.Println("  ✗ Provider NOT recognized — NOT supported by the dynamic server browser.")
+	fmt.Println()
+	fmt.Println("    This is still a VALID WireGuard config and WILL work in LazyVPN — but")
+	fmt.Println("    only via MANUAL import: Settings → \"Import WireGuard Config\" (one server")
+	fmt.Println("    per .conf file). Do NOT use \"Set Up Provider\" for it — that flow is for")
+	fmt.Println("    the dynamic browser, which won't work here.")
+	fmt.Println()
+	fmt.Println("    Why: the dynamic server browser lists a provider's whole network by")
+	fmt.Println("    fetching that provider's server list from the gluetun project's data")
+	fmt.Println("    (github.com/qdm12/gluetun-servers), which LazyVPN mirrors and refreshes")
+	fmt.Println("    weekly. A provider that isn't in that data set (e.g. VPN Unlimited /")
+	fmt.Println("    KeepSolid) has no server list for LazyVPN to fetch, so the browser has")
+	fmt.Println("    nothing to populate — hence one-config-per-server manual import.")
+	fmt.Println()
+	fmt.Printf("    Providers the dynamic browser supports: %s.\n", strings.Join(provider.SupportedProviders, ", "))
 }
 
 // hint adds a plain-language explanation for the common parse failures. The

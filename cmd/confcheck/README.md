@@ -5,10 +5,16 @@ does or doesn't validate under LazyVPN's **exact** rules — it calls LazyVPN's 
 `ParseConfig` / `Validate` / `ValidatePrivateKey`, so the verdict matches what
 LazyVPN's "Set Up Provider" / "Import WireGuard Config" would decide.
 
+It also reports whether the config's **provider is supported by the dynamic
+server browser** (using LazyVPN's exact detection). For a valid config whose
+provider isn't supported, it explains that the config still works via manual
+import but can't be browsed dynamically (its servers aren't in the gluetun data
+LazyVPN mirrors).
+
 **It prints no secrets.** No private/preshared/public keys, no endpoint, address,
 or DNS *values* are ever shown — only which fields are present, whether keys
-decode, their byte lengths, and the pass/fail verdict. The output is safe to
-paste into a bug report.
+decode, their byte lengths, the detected provider id, and the verdict. The
+output is safe to paste into a bug report.
 
 ## Use it — no build needed
 
