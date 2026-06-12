@@ -520,6 +520,32 @@ See [💽 How LazyVPN deletes files](#-how-lazyvpn-deletes-files) for what each 
 - Check `lazyvpn killswitch status` to see if stale rules are interfering.
 - Enable debug logging (Settings > Debug & Logs > Log Connections) and check `~/.config/lazyvpn/debug.log`.
 
+**Country flags show as two letters (e.g. `AF`, `SE`, `US`)**
+
+This is your terminal, not LazyVPN and not a missing font. A flag emoji is two
+"Regional Indicator" characters (🇦 + 🇫 → 🇦🇫); the terminal has to combine that pair
+into a single flag glyph. Some terminals do, some don't — when they don't, you see
+the two letters instead.
+
+The two shots below are the *same machine, same font, same LazyVPN* — only the
+terminal differs:
+
+| Ghostty (composes the pair) | Alacritty (does not) |
+|---|---|
+| ![Flags in Ghostty](images/flags-ghostty.png) | ![Letters in Alacritty](images/flags-alacritty.png) |
+
+**Alacritty is Omarchy's default terminal, and it's the one that doesn't compose flag
+sequences** — so out of the box you'll see `AF` instead of 🇦🇫. Ghostty and kitty render
+them fine.
+
+- **Want flags?** Switch your default terminal away from Alacritty to Ghostty or kitty:
+  ```bash
+  omarchy default terminal ghostty
+  # or
+  omarchy default terminal kitty
+  ```
+- It's purely cosmetic — server selection, connecting, and everything else work identically either way, letters or flags.
+
 ---
 
 ## Roadmap
