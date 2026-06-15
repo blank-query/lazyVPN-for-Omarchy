@@ -8,6 +8,7 @@ LazyVPN is a compiled Go binary with a built-in [Bubbletea](https://github.com/c
 
 - [Quick Start](#quick-start)
 - [Screenshots](#screenshots)
+- [Theming](THEMING.md)
 - [Why LazyVPN?](#why-lazyvpn)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -431,6 +432,7 @@ LazyVPN is part of your Omarchy desktop.
 * **App Launcher:** `.desktop` entry makes LazyVPN searchable in your application launcher (`SUPER+SPACE`).
 * **Keybinding:** `SUPER+SHIFT+L` launches LazyVPN in a floating window.
 * **Desktop Notifications:** Native notifications for connection status and auto-recovery events.
+* **Automatic Theming:** LazyVPN reads your active Omarchy theme and matches its colors — no setup. See **[Theming](THEMING.md)** for how it works and a gallery of every built-in theme.
 
 ---
 
