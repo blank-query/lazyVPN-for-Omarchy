@@ -2,6 +2,19 @@
 
 All notable changes to LazyVPN are documented here.
 
+## 1.0.5
+
+- Tutorial: bring the in-app tutorial in line with the current behavior.
+  - **Local Network** is described as an independent, always-in-effect layer
+    (it was still worded as only applying "while the killswitch is active",
+    which stopped being true after the 1.0.2/1.0.4 firewall refactor).
+  - **Updates**: document the in-app update path — when an update is found, an
+    "Update X.Y.Z" item appears at the top of the sidebar to install it — plus
+    the manual check in Settings, alongside the existing daily auto-check and
+    `lazyvpn update` CLI.
+  - Add **Theming** (LazyVPN matches your Omarchy theme automatically) and
+    **Uninstall** (`lazyvpn uninstall`) tips.
+
 ## 1.0.4
 
 Clears up the firewall model — three independent layers (Killswitch, Local

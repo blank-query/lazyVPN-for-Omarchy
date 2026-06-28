@@ -111,7 +111,7 @@ If the VPN drops unexpectedly, your real IP is never exposed.
                                               Prompt — asks you each time
                                               Never  — stays on (blocks all internet)
 
-  LOCAL NETWORK [Allow/Stealth/Block]       Controls LAN access while killswitch is active:
+  LOCAL NETWORK [Allow/Stealth/Block]       Independent LAN policy, always in effect:
                                               Allow   — full LAN access (printers, NAS, shares)
                                               Stealth — blocks inbound LAN, allows outbound
                                               Block   — blocks all LAN traffic both directions
@@ -138,9 +138,12 @@ If the VPN drops unexpectedly, your real IP is never exposed.
                                             to the next best server automatically.
 
   AUTO-CHECK UPDATES [On/Off]               Checks GitHub for new releases once per day.
-                                            Disabled by default. Nothing installs without
-                                            your confirmation. You can also run
-                                            'lazyvpn update' from the terminal.
+                                            Disabled by default. When an update is found, an
+                                            "Update X.Y.Z" item appears at the top of the
+                                            sidebar — select it to install. Nothing installs
+                                            without your confirmation. You can also check
+                                            manually in Settings, or run 'lazyvpn update'
+                                            from the terminal.
 
   HEALTH CHECK TARGETS                      The daemon pings configurable endpoints to
     Settings > Advanced                     check connectivity. Change them in Settings >
@@ -195,6 +198,12 @@ with 600 permissions (read/write only by you). They are never sent anywhere.`,
   SPEED TEST            Dashboard > Speed Test runs a 10MB download test through the VPN.
 
   SECURITY AUDIT        Dashboard > Security Audit checks killswitch, DNS, IPv6, and more.
+
+  THEMING               LazyVPN automatically matches your active Omarchy theme. Switch
+                        themes in Omarchy and relaunch LazyVPN to pick up the new colors.
+
+  UNINSTALL             Run 'lazyvpn uninstall' from the terminal for a guided, step-by-step
+                        removal of LazyVPN and all the system changes it made.
 
 
   KEYBOARD SHORTCUTS
