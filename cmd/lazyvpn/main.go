@@ -708,13 +708,15 @@ func runInstall() {
 		}
 	}
 
-	// Check if systemd-networkd is enabled
-	cmd := exec.Command("systemctl", "is-enabled", "systemd-networkd")
+	// Check if systemd-resolved is enabled. The interface itself is managed
+	// via netlink + wgctrl (see docs/architecture.md), so networkd is not
+	// required — NetworkManager-managed systems are supported. DNS, however,
+	// goes through systemd-resolved on every connect.
+	cmd := exec.Command("systemctl", "is-enabled", "systemd-resolved")
 	if err := cmd.Run(); err != nil {
-		fmt.Println("Error: systemd-networkd is not enabled.")
-		fmt.Println("LazyVPN is built specifically for systemd-networkd.")
+		fmt.Println("Error: systemd-resolved is not enabled.")
+		fmt.Println("LazyVPN configures VPN DNS through systemd-resolved.")
 		fmt.Println("Please enable it first:")
-		fmt.Println("  sudo systemctl enable --now systemd-networkd")
 		fmt.Println("  sudo systemctl enable --now systemd-resolved")
 		os.Exit(1)
 	}
@@ -882,7 +884,7 @@ func runInstall() {
 	fmt.Println()
 	fmt.Println("LazyVPN can configure passwordless sudo for specific VPN-related commands:")
 	fmt.Println("  • ip link/addr/route (scoped to interface: " + connName + ")")
-	fmt.Println("  • resolvectl, ufw, systemd-networkd")
+	fmt.Println("  • resolvectl, ufw")
 	fmt.Println()
 	fmt.Println("This allows seamless connection/disconnection without password prompts.")
 	fmt.Println("Only specific commands are permitted, not blanket sudo access.")
