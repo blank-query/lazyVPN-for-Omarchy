@@ -470,6 +470,37 @@ func TestLayoutStatusUpdateMsg(t *testing.T) {
 	_, _ = l.Update(StatusUpdateMsg{})
 }
 
+// TestLayoutRoutesStatusFooterRefreshMsg is a regression test: Layout.Update
+// previously had no case for statusFooterRefreshMsg (the result of the
+// footer's own async netlink/UFW probe, dispatched via StatusUpdateMsg).
+// The message fell through to the catch-all at the end of Update, which
+// only forwards non-key messages to l.content, never to l.footer — so the
+// footer's connected/killswitch fields stayed at their zero-value default
+// forever, and the status bar showed DISCONNECTED regardless of the real
+// connection state.
+func TestLayoutRoutesStatusFooterRefreshMsg(t *testing.T) {
+	l := newTestLayout(t)
+	l.width = 120
+	l.height = 40
+
+	msg := statusFooterRefreshMsg{
+		connected:  true,
+		prettyName: "US - New York #42",
+		killswitch: true,
+	}
+	_, _ = l.Update(msg)
+
+	if !l.footer.connected {
+		t.Error("statusFooterRefreshMsg should set footer.connected")
+	}
+	if l.footer.prettyName != "US - New York #42" {
+		t.Errorf("footer.prettyName = %q, want %q", l.footer.prettyName, "US - New York #42")
+	}
+	if !l.footer.killswitch {
+		t.Error("statusFooterRefreshMsg should set footer.killswitch")
+	}
+}
+
 func TestLayoutView(t *testing.T) {
 	l := newTestLayout(t)
 	l.width = 120

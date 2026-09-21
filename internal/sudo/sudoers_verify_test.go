@@ -12,7 +12,7 @@ import (
 // scoping, which applies regardless of filesystem variant.
 func TestGenerateSudoersScoping(t *testing.T) {
 	// With physical interfaces - should scope to each
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0", "wlan0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0", "wlan0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestGenerateSudoersScoping(t *testing.T) {
 	// Without physical interfaces — should NOT emit a wildcard fallback
 	// (degenerate state; route-add will fail loudly at use time rather
 	// than silently granting `ip route add * via * dev *`).
-	content2, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", nil, false)
+	content2, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", nil, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -195,7 +195,7 @@ var rmFileEntries = []string{
 }
 
 func TestGenerateSudoersCoWVariant(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, true)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, true, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestGenerateSudoersCoWVariant(t *testing.T) {
 }
 
 func TestGenerateSudoersNonCoWVariant(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestGenerateSudoersNonCoWVariant(t *testing.T) {
 // Sibling to the other sudoers-completeness pins; this completes the
 // coverage of every NOPASSWD entry in the template.
 func TestGenerateSudoers_ExactPathOpsPresent(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("GenerateSudoersContent: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestGenerateSudoers_ExactPathOpsPresent(t *testing.T) {
 // capability list AND the binary path appear in the generated content.
 func TestGenerateSudoers_SetcapEntry(t *testing.T) {
 	execPath := "/opt/lazyvpn-test/lazyvpn"
-	content, err := GenerateSudoersContent(execPath, "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent(execPath, "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("GenerateSudoersContent: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestGenerateSudoers_SetcapEntry(t *testing.T) {
 // Sibling pattern to 819acfb (resolvectl), 0688f32 (UFW logging),
 // a3b8a8d (ip link), 5a0bc49 (ip route+addr).
 func TestGenerateSudoers_AllUfwSubcommandsPresent(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("GenerateSudoersContent: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestGenerateSudoers_AllUfwSubcommandsPresent(t *testing.T) {
 // on the physical interface even though the tunnel is up. Silent
 // failure since the netlink call succeeded BEFORE EPERM hit.
 func TestGenerateSudoers_AllIpRouteAndAddrOperationsPresent(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("GenerateSudoersContent: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestGenerateSudoers_AllIpRouteAndAddrOperationsPresent(t *testing.T) {
 // Each enumeration is a security boundary — explicit allow-list
 // catches the dropped-entry silent-failure pattern.
 func TestGenerateSudoers_AllIpLinkOperationsPresent(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("GenerateSudoersContent: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestGenerateSudoers_AllIpLinkOperationsPresent(t *testing.T) {
 //
 // Sibling pattern to 0688f32 (UFW logging levels).
 func TestGenerateSudoers_AllResolvectlSubcommandsPresent(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("GenerateSudoersContent: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestGenerateSudoers_AllResolvectlSubcommandsPresent(t *testing.T) {
 // Sibling pattern to other security-list pins (6885299, 9e8cc3e,
 // 2ab851b) — explicit enumeration prevents silent failure modes.
 func TestGenerateSudoers_AllUfwLoggingLevelsPresent(t *testing.T) {
-	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false)
+	content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, false, DefaultSudoersEnv())
 	if err != nil {
 		t.Fatalf("GenerateSudoersContent: %v", err)
 	}
@@ -560,14 +560,14 @@ func TestGenerateSudoersRejectsBadConnName(t *testing.T) {
 		"a234567890123456",                // 16 chars (IFNAMSIZ-1 = 15)
 	}
 	for _, name := range bad {
-		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", name, []string{"enp3s0"}, false)
+		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", name, []string{"enp3s0"}, false, DefaultSudoersEnv())
 		if err == nil {
 			t.Errorf("expected rejection for connName=%q, got no error", name)
 		}
 	}
 	good := []string{"wg0", "wg-vpn", "wg.test", "wg_0", "Aa1.-_"}
 	for _, name := range good {
-		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", name, []string{"enp3s0"}, false)
+		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", name, []string{"enp3s0"}, false, DefaultSudoersEnv())
 		if err != nil {
 			t.Errorf("expected success for connName=%q, got %v", name, err)
 		}
@@ -597,19 +597,19 @@ func TestGenerateSudoersRejectsBadIfaceName(t *testing.T) {
 		"a234567890123456",                       // 16 chars (IFNAMSIZ-1 = 15)
 	}
 	for _, iface := range badIfaces {
-		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", "wg0", []string{iface}, false)
+		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", "wg0", []string{iface}, false, DefaultSudoersEnv())
 		if err == nil {
 			t.Errorf("expected rejection for iface=%q, got no error", iface)
 		}
 	}
 	// One bad among many must still be rejected (not silently skipped).
-	if _, err := GenerateSudoersContent("/usr/bin/lazyvpn", "wg0", []string{"eth0", "bad\nname", "wlan0"}, false); err == nil {
+	if _, err := GenerateSudoersContent("/usr/bin/lazyvpn", "wg0", []string{"eth0", "bad\nname", "wlan0"}, false, DefaultSudoersEnv()); err == nil {
 		t.Error("expected rejection when one of several physicalIfaces is bad")
 	}
 
 	good := []string{"eth0", "wlan0", "enp3s0", "eno1", "br-data", "wlx0123456789ab"}
 	for _, iface := range good {
-		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", "wg0", []string{iface}, false)
+		_, err := GenerateSudoersContent("/usr/bin/lazyvpn", "wg0", []string{iface}, false, DefaultSudoersEnv())
 		if err != nil {
 			t.Errorf("expected success for iface=%q, got %v", iface, err)
 		}
@@ -634,7 +634,7 @@ func TestGenerateSudoersPassesVisudo(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, c.cow)
+			content, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", []string{"enp3s0"}, c.cow, DefaultSudoersEnv())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

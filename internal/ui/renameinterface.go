@@ -212,6 +212,7 @@ func (m RenameInterface) doSudoersRefresh() tea.Cmd {
 	newName := m.currentName // already updated by renameResultMsg handler
 	cowFilesystem := m.cfg.IsCOWFilesystem()
 	sudoersInstalled := m.cfg.SudoersInstalled
+	family := m.cfg.Family()
 	return func() tea.Msg {
 		// Respect the user's install-time choice. Use the config flag rather
 		// than os.Stat-ing /etc/sudoers.d/lazyvpn directly: the parent dir is
@@ -226,7 +227,9 @@ func (m RenameInterface) doSudoersRefresh() tea.Cmd {
 		if err != nil {
 			return sudoersRefreshMsg{err: fmt.Errorf("could not determine binary path: %w", err)}
 		}
-		return sudoersRefreshMsg{err: refreshSudoers(execPath, newName, cowFilesystem)}
+		// Re-detect the env at refresh time (same as a fresh install would)
+		// so the regenerated file tracks the host's current group/paths.
+		return sudoersRefreshMsg{err: refreshSudoers(execPath, newName, cowFilesystem, sudo.DetectSudoersEnv(family))}
 	}
 }
 

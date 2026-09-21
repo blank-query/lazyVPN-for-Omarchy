@@ -12,12 +12,12 @@ func TestGenerateSudoersIsDeterministic(t *testing.T) {
 	for _, cow := range []bool{true, false} {
 		t.Run("cow", func(t *testing.T) {
 			ifaces := []string{"enp3s0", "wlan0", "enp1s0"}
-			a, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", ifaces, cow)
+			a, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", ifaces, cow, DefaultSudoersEnv())
 			if err != nil {
 				t.Fatalf("first: %v", err)
 			}
 			for i := 0; i < 5; i++ {
-				b, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", ifaces, cow)
+				b, err := GenerateSudoersContent("/usr/local/bin/lazyvpn", "wg0", ifaces, cow, DefaultSudoersEnv())
 				if err != nil {
 					t.Fatalf("iteration %d: %v", i, err)
 				}

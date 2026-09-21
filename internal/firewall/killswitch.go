@@ -442,11 +442,20 @@ var sysctlIPv6ConfPath = "/etc/sysctl.d/99-lazyvpn-ipv6.conf"
 //   - 'rm  /etc/sysctl.d/99-lazyvpn-ipv6.conf' for the removal (already
 //     present for the uninstaller's IPv6 cleanup; we reuse it).
 //
+// applySysctlConf loads the conf into the running kernel via
+// 'sysctl -p <conf>'. Same reason as the two above: it shells out through
+// sudo, so tests MUST override it. Left unstubbed, a test that reaches the
+// Layer 1 fallback runs a real `sudo -n sysctl -p` against the host and its
+// result then depends on whether the conf file happens to exist there —
+// which it does on any machine that ran `lazyvpn install`, since the
+// installer's IPv6 prompt defaults to yes.
+//
 // Tests override these vars to bypass sudo and write to a temp path.
 var (
 	writeFile        = os.WriteFile
 	writeSysctlConf  = sudoTeeSysctlConf
 	removeSysctlConf = sudoRmSysctlConf
+	applySysctlConf  = sudoApplySysctlConf
 )
 
 // sudoTeeSysctlConf streams the content into `sudo -n tee <conf>`. Captures
@@ -495,6 +504,29 @@ func sudoRmSysctlConf() error {
 			return fmt.Errorf("ipv6 sysctl remove: %w", sudo.ErrAuthRequired)
 		}
 		return fmt.Errorf("ipv6 sysctl remove: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// sudoApplySysctlConf loads the persistent conf into the running kernel via
+// the `sudo -n sysctl -p <conf>` NOPASSWD entry. Used when the Layer 1 /proc
+// write failed (no caps yet — typically the install flow), so the kernel
+// still picks up the change immediately instead of waiting for a reboot.
+// Bounded — same rationale as sudoTeeSysctlConf.
+func sudoApplySysctlConf() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sudo", "-n", "sysctl", "-p", sysctlIPv6ConfPath)
+	sudo.SetCLocale(cmd) // keep auth-required text English for IsAuthError
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("ipv6 disable: sysctl -p timed out — sudo may be wedged")
+		}
+		if sudo.IsAuthError(out) {
+			return fmt.Errorf("ipv6 disable: %w", sudo.ErrAuthRequired)
+		}
+		return fmt.Errorf("ipv6 disable: sysctl -p failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -552,18 +584,8 @@ net.ipv6.conf.lo.disable_ipv6 = 1
 		// typically the install flow). Apply the conf we just wrote via
 		// `sysctl -p`, which runs as root through the existing NOPASSWD
 		// entry. Net effect matches Layer 1: kernel state changes immediately.
-		sysctlCtx, sysctlCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer sysctlCancel()
-		sysctlCmd := exec.CommandContext(sysctlCtx, "sudo", "-n", "sysctl", "-p", sysctlIPv6ConfPath)
-		sudo.SetCLocale(sysctlCmd)
-		if out, err := sysctlCmd.CombinedOutput(); err != nil {
-			if sysctlCtx.Err() == context.DeadlineExceeded {
-				return fmt.Errorf("ipv6 disable: sysctl -p timed out — sudo may be wedged")
-			}
-			if sudo.IsAuthError(out) {
-				return fmt.Errorf("ipv6 disable: %w", sudo.ErrAuthRequired)
-			}
-			return fmt.Errorf("ipv6 disable: sysctl -p failed: %w: %s", err, strings.TrimSpace(string(out)))
+		if err := applySysctlConf(); err != nil {
+			return err
 		}
 	}
 

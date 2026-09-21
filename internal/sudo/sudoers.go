@@ -32,9 +32,37 @@ var connNameRe = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,15}$`)
 // omitted. `rm` entries are uniform: primary delete on CoW, fallback on
 // non-CoW. Every NOPASSWD line is a privilege grant, so we only emit what
 // the runtime actually invokes.
-func GenerateSudoersContent(execPath, connName string, physicalIfaces []string, cowFilesystem bool) (string, error) {
+//
+// env adapts the file to the host's conventions (admin group + binary
+// locations) — see SudoersEnv. The template below is authored in the
+// historic Arch shape (%wheel, /usr/bin) and rewritten token-by-token
+// afterwards; DefaultSudoersEnv() reproduces the historic output exactly.
+func GenerateSudoersContent(execPath, connName string, physicalIfaces []string, cowFilesystem bool, env SudoersEnv) (string, error) {
 	if !connNameRe.MatchString(connName) {
 		return "", fmt.Errorf("refusing to generate sudoers: connName %q does not match %s", connName, connNameRe.String())
+	}
+	// Same defense-in-depth posture for env: group and paths are
+	// interpolated into a privileged file, so refuse anything that could
+	// smuggle extra sudoers syntax (whitespace, newlines, globs). A path
+	// must also basename-match its command — a Paths entry like
+	// {"ufw": "/usr/bin/bash"} is a privilege rewrite, not a relocation.
+	group := env.Group
+	if group == "" {
+		group = "wheel"
+	}
+	if !groupRe.MatchString(group) {
+		return "", fmt.Errorf("refusing to generate sudoers: group %q does not match %s", group, groupRe.String())
+	}
+	for cmd, p := range env.Paths {
+		if !isSudoersCommand(cmd) {
+			return "", fmt.Errorf("refusing to generate sudoers: %q is not a granted command", cmd)
+		}
+		if !binPathRe.MatchString(p) {
+			return "", fmt.Errorf("refusing to generate sudoers: path %q for %q does not match %s", p, cmd, binPathRe.String())
+		}
+		if filepath.Base(p) != cmd {
+			return "", fmt.Errorf("refusing to generate sudoers: path %q does not end in %q", p, cmd)
+		}
 	}
 	// Same defense-in-depth check for every physicalIface. The names
 	// are interpolated into sudoers rules via fmt.Sprintf with no
@@ -72,7 +100,7 @@ func GenerateSudoersContent(execPath, connName string, physicalIfaces []string, 
 `
 	}
 
-	return fmt.Sprintf(`# LazyVPN sudoers configuration
+	content := fmt.Sprintf(`# LazyVPN sudoers configuration
 # Allow VPN management without password (native netlink approach)
 # Interface: %s
 
@@ -183,7 +211,25 @@ func GenerateSudoersContent(execPath, connName string, physicalIfaces []string, 
 		execPath,
 		// CoW-conditional shred entries (empty string on CoW)
 		shredEntries,
-	), nil
+	)
+
+	// Token rewrites for the host's conventions. Each replaced token is
+	// exact and unambiguous: the grant prefix includes the ALL=(ALL)
+	// NOPASSWD: tail so a "%wheel" appearing in a comment is untouched,
+	// and each binary token carries its trailing space so "/usr/bin/rm "
+	// can never clip "/usr/bin/resolvectl ...".
+	if group != "wheel" {
+		content = strings.ReplaceAll(content,
+			"%wheel ALL=(ALL) NOPASSWD:",
+			"%"+group+" ALL=(ALL) NOPASSWD:")
+	}
+	for cmd, p := range env.Paths {
+		if p == "/usr/bin/"+cmd {
+			continue
+		}
+		content = strings.ReplaceAll(content, "/usr/bin/"+cmd+" ", p+" ")
+	}
+	return content, nil
 }
 
 // DetectPhysicalInterfaces returns the names of all non-virtual, non-VPN
@@ -225,11 +271,13 @@ func isVirtualInterface(name string) bool {
 // InstallSudoers writes the sudoers file for the given binary and interface name.
 // Detects physical interfaces for scoped host route rules. cowFilesystem
 // controls whether shred entries are emitted (see GenerateSudoersContent).
+// env adapts group + binary paths to the host (see SudoersEnv); callers
+// build it with DetectSudoersEnv(family).
 // Uses visudo to validate syntax before installing. Requires sudo.
 // Returns nil on success, error on failure.
-var InstallSudoers = func(execPath, connName string, cowFilesystem bool) error {
+var InstallSudoers = func(execPath, connName string, cowFilesystem bool, env SudoersEnv) error {
 	physicalIfaces := DetectPhysicalInterfaces()
-	content, err := GenerateSudoersContent(execPath, connName, physicalIfaces, cowFilesystem)
+	content, err := GenerateSudoersContent(execPath, connName, physicalIfaces, cowFilesystem, env)
 	if err != nil {
 		return fmt.Errorf("sudoers content generation: %w", err)
 	}

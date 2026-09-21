@@ -81,8 +81,9 @@ type Config struct {
 	LogMode        string // "safe" or "accurate"
 
 	// System (detected at install time)
-	Distro string // "omarchy", "arch", "debian", "ubuntu", etc.
-	FSType string // "btrfs", "ext4", "xfs", etc.
+	Distro       string // "omarchy", "arch", "debian", "ubuntu", etc.
+	DistroFamily string // mechanics family: "arch", "debian", "fedora", "suse", "unknown"
+	FSType       string // "btrfs", "ext4", "xfs", etc.
 
 	// SudoersInstalled records whether the user opted into the passwordless
 	// sudoers file at install time. Source of truth for "should we refresh
@@ -151,6 +152,7 @@ type configJSON struct {
 	LogMode        string `json:"log_mode"`
 
 	Distro           string `json:"distro"`
+	DistroFamily     string `json:"distro_family"`
 	FSType           string `json:"fs_type"`
 	SudoersInstalled bool   `json:"sudoers_installed"`
 
@@ -203,6 +205,7 @@ func (c *Config) toJSON() configJSON {
 		LogAutostart:          c.LogAutostart,
 		LogMode:               c.LogMode,
 		Distro:                c.Distro,
+		DistroFamily:          c.DistroFamily,
 		FSType:                c.FSType,
 		SudoersInstalled:      c.SudoersInstalled,
 		AutoCheckUpdates:      c.AutoCheckUpdates,
@@ -253,6 +256,7 @@ func (c *Config) fromJSON(j configJSON) {
 	c.LogAutostart = j.LogAutostart
 	c.LogMode = j.LogMode
 	c.Distro = j.Distro
+	c.DistroFamily = j.DistroFamily
 	c.FSType = j.FSType
 	c.SudoersInstalled = j.SudoersInstalled
 	c.AutoCheckUpdates = j.AutoCheckUpdates
@@ -707,6 +711,19 @@ func (c *Config) ClearConnectionState(clearLastServer bool) error {
 // IsOmarchy returns true if the detected distro is Omarchy Linux.
 func (c *Config) IsOmarchy() bool {
 	return c.Distro == "omarchy"
+}
+
+// Family returns the stored mechanics family, re-detecting when the config
+// predates the field (pre-scaffold installs have no distro_family key).
+// Callers deciding an Omarchy-specific FEATURE must check IsOmarchy() first
+// and never branch on Family() for it — family only selects mechanics
+// (sudoers group, binary paths, package names), which are identical for
+// Omarchy and vanilla Arch.
+func (c *Config) Family() string {
+	if c.DistroFamily != "" {
+		return c.DistroFamily
+	}
+	return DetectDistroFamily()
 }
 
 // IsCOWFilesystem returns true if the detected filesystem is copy-on-write

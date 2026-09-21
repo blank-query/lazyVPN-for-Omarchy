@@ -639,8 +639,14 @@ func runInstall() {
 	}
 	srcExecPath, _ = filepath.EvalSymlinks(srcExecPath)
 
-	// Detect system
+	// Detect system. Omarchy detection (marker dir) is the sole authority
+	// for Omarchy-specific features and is consulted first, always; family
+	// is the subordinate axis and only ever selects mechanics — sudoers
+	// group, binary paths, package names. On Omarchy family reads "arch"
+	// (its os-release says ID=arch), which is correct: those mechanics are
+	// identical for Omarchy and vanilla Arch.
 	distro := config.DetectDistro()
+	family := config.DetectDistroFamily()
 	fsType := config.DetectFSType(homeDir)
 	isOmarchy := distro == "omarchy"
 	_, hyprErr := exec.LookPath("hyprctl")
@@ -654,6 +660,7 @@ func runInstall() {
 	fmt.Println()
 	fmt.Println("Detecting system...")
 	fmt.Printf("  Distro:     %s\n", distro)
+	fmt.Printf("  Family:     %s\n", family)
 	fmt.Printf("  Filesystem: %s\n", fsType)
 	fmt.Printf("  Hyprland:   %v\n", isHyprland)
 	fmt.Printf("  Waybar:     %v\n", isWaybar)
@@ -708,13 +715,19 @@ func runInstall() {
 		}
 	}
 
-	// Check if systemd-networkd is enabled
-	cmd := exec.Command("systemctl", "is-enabled", "systemd-networkd")
-	if err := cmd.Run(); err != nil {
-		fmt.Println("Error: systemd-networkd is not enabled.")
-		fmt.Println("LazyVPN is built specifically for systemd-networkd.")
+	// Check systemd-resolved is running or will start at boot. The interface
+	// itself is managed via netlink + wgctrl (see docs/architecture.md), so
+	// networkd is not required — NetworkManager-managed systems are
+	// supported. DNS, however, goes through systemd-resolved on every
+	// connect, so gate on that instead. is-active alone misses a unit that
+	// will start at boot but hasn't yet; is-enabled alone misses one running
+	// but started manually — either is sufficient for the install to work.
+	active := exec.Command("systemctl", "is-active", "--quiet", "systemd-resolved").Run() == nil
+	enabled := exec.Command("systemctl", "is-enabled", "--quiet", "systemd-resolved").Run() == nil
+	if !active && !enabled {
+		fmt.Println("Error: systemd-resolved is not active or enabled.")
+		fmt.Println("LazyVPN configures VPN DNS through systemd-resolved.")
 		fmt.Println("Please enable it first:")
-		fmt.Println("  sudo systemctl enable --now systemd-networkd")
 		fmt.Println("  sudo systemctl enable --now systemd-resolved")
 		os.Exit(1)
 	}
@@ -808,6 +821,7 @@ func runInstall() {
 
 	// Store detected system info
 	cfg.Distro = distro
+	cfg.DistroFamily = family
 	cfg.FSType = fsType
 
 	// Detect and save install source directory (git clone location)
@@ -882,7 +896,7 @@ func runInstall() {
 	fmt.Println()
 	fmt.Println("LazyVPN can configure passwordless sudo for specific VPN-related commands:")
 	fmt.Println("  • ip link/addr/route (scoped to interface: " + connName + ")")
-	fmt.Println("  • resolvectl, ufw, systemd-networkd")
+	fmt.Println("  • resolvectl, ufw")
 	fmt.Println()
 	fmt.Println("This allows seamless connection/disconnection without password prompts.")
 	fmt.Println("Only specific commands are permitted, not blanket sudo access.")
@@ -892,7 +906,7 @@ func runInstall() {
 	var choice string
 	fmt.Scanln(&choice)
 	if choice != "n" && choice != "N" {
-		if installSudoers(execPath, connName, fsType == "btrfs") {
+		if installSudoers(execPath, connName, fsType == "btrfs", family) {
 			cfg.SudoersInstalled = true
 			// Critical save: the SudoersInstalled flag gates whether
 			// rename-interface refreshes the sudoers file. Silent failure
@@ -1297,17 +1311,31 @@ StartupNotify=false
 	// Step 10: Verify and install dependencies
 	fmt.Println()
 	fmt.Println("Step 10: Verifying dependencies...")
+	// Package names differ by family: resolvectl ships in "systemd" on
+	// Arch but split out as "systemd-resolved" on Debian (≥12) and
+	// Fedora/openSUSE; Fedora's iproute2 package is named "iproute".
+	resolvectlPkg := "systemd"
+	if family != "arch" && family != "unknown" {
+		resolvectlPkg = "systemd-resolved"
+	}
+	ipPkg := "iproute2"
+	if family == "fedora" {
+		ipPkg = "iproute"
+	}
 	deps := []struct {
 		cmd string
 		pkg string
 	}{
-		{"resolvectl", "systemd"},
+		{"resolvectl", resolvectlPkg},
 		{"ufw", "ufw"},
-		{"ip", "iproute2"},
+		{"ip", ipPkg},
 	}
 	var missing []string
 	for _, dep := range deps {
-		if _, err := exec.LookPath(dep.cmd); err != nil {
+		// FindSystemBinary, not LookPath: Debian-family user sessions
+		// typically omit /usr/sbin from PATH, so LookPath reports ufw
+		// "missing" on systems where it's installed and sudo-reachable.
+		if _, found := sudo.FindSystemBinary(dep.cmd, family); !found {
 			fmt.Printf("  ⚠ Missing: %s\n", dep.cmd)
 			missing = append(missing, dep.pkg)
 		} else {
@@ -1480,7 +1508,26 @@ StartupNotify=false
 // (cfg.SudoersInstalled), which downstream code reads as the source of truth
 // — os.Stat on /etc/sudoers.d/lazyvpn fails with EACCES from non-root because
 // the parent dir is 0750.
-func installSudoers(execPath, connName string, cowFilesystem bool) bool {
+func installSudoers(execPath, connName string, cowFilesystem bool, family string) bool {
+	// The grants target an admin group. If the user isn't in it, the file
+	// installs and validates cleanly but grants apply to nobody — the first
+	// symptom is a connect failing at the DNS step with an auth error, far
+	// from the cause. Bounce it to the user here instead of writing a file
+	// that silently does nothing.
+	group, isMember := sudo.DetectSudoGroup()
+	if !isMember {
+		fmt.Printf("  ⚠ The sudoers entries will be written for group '%s',\n", group)
+		fmt.Println("    but your user is not in that group — the entries would apply to nobody.")
+		fmt.Printf("    To fix: sudo usermod -aG %s $USER   (then log out and back in, and re-run install)\n", group)
+		fmt.Print("  Install the sudoers file anyway? [y/N] ")
+		var goAhead string
+		fmt.Scanln(&goAhead)
+		if goAhead != "y" && goAhead != "Y" {
+			fmt.Println("  Skipping sudoers installation")
+			return false
+		}
+	}
+
 	// Prime sudo cache so InstallSudoers (which uses sudo -n) succeeds.
 	// In the installer we have a TTY, so interactive sudo prompt works.
 	if !sudo.ProbeCache() {
@@ -1490,7 +1537,7 @@ func installSudoers(execPath, connName string, cowFilesystem bool) bool {
 			return false
 		}
 	}
-	if err := sudo.InstallSudoers(execPath, connName, cowFilesystem); err != nil {
+	if err := sudo.InstallSudoers(execPath, connName, cowFilesystem, sudo.DetectSudoersEnv(family)); err != nil {
 		fmt.Printf("  ⚠ %v\n", err)
 		return false
 	}

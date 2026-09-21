@@ -174,3 +174,82 @@ func TestDetectFSTypeError(t *testing.T) {
 		t.Errorf("DetectFSType() = %q, want 'unknown' on error", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// DetectDistroFamily
+// ---------------------------------------------------------------------------
+
+// setOSRelease writes an os-release file with the given content and points
+// detection at it for the duration of the test.
+func setOSRelease(t *testing.T, content string) {
+	t.Helper()
+	osRelease := filepath.Join(t.TempDir(), "os-release")
+	if err := os.WriteFile(osRelease, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origFile := osReleaseFile
+	osReleaseFile = osRelease
+	t.Cleanup(func() { osReleaseFile = origFile })
+}
+
+func TestDetectDistroFamily(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		// Direct IDs
+		{"arch", "ID=arch\n", "arch"},
+		{"debian", "ID=debian\n", "debian"},
+		{"ubuntu", `ID=ubuntu` + "\n" + `ID_LIKE=debian` + "\n", "debian"},
+		{"fedora", "ID=fedora\n", "fedora"},
+		{"opensuse-tumbleweed", `ID="opensuse-tumbleweed"` + "\n" + `ID_LIKE="opensuse suse"` + "\n", "suse"},
+		// Derivatives classify by ID_LIKE lineage
+		{"cachyos", `ID=cachyos` + "\n" + `ID_LIKE=arch` + "\n", "arch"},
+		{"pop", `ID=pop` + "\n" + `ID_LIKE="ubuntu debian"` + "\n", "debian"},
+		{"centos", `ID="centos"` + "\n" + `ID_LIKE="rhel fedora"` + "\n", "fedora"},
+		// ID wins over ID_LIKE when both map
+		{"id-wins", "ID=debian\nID_LIKE=arch\n", "debian"},
+		// Unknowns
+		{"gentoo", "ID=gentoo\n", "unknown"},
+		{"empty", "\n", "unknown"},
+		{"quoted-id", `ID="arch"` + "\n", "arch"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setOSRelease(t, tc.content)
+			if got := DetectDistroFamily(); got != tc.want {
+				t.Errorf("DetectDistroFamily() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDetectDistroFamilyMissingFile(t *testing.T) {
+	origFile := osReleaseFile
+	osReleaseFile = filepath.Join(t.TempDir(), "no-such-file")
+	t.Cleanup(func() { osReleaseFile = origFile })
+	if got := DetectDistroFamily(); got != "unknown" {
+		t.Errorf("DetectDistroFamily() = %q, want \"unknown\" for missing os-release", got)
+	}
+}
+
+// Family() prefers the stored value; empty falls through to detection.
+// The Omarchy hierarchy: family NEVER decides an Omarchy feature —
+// IsOmarchy() stays marker/Distro-based and is independent of family.
+func TestConfigFamilyStoredAndFallback(t *testing.T) {
+	setOSRelease(t, "ID=debian\n")
+	c := &Config{DistroFamily: "arch"}
+	if got := c.Family(); got != "arch" {
+		t.Errorf("Family() = %q, want stored \"arch\"", got)
+	}
+	c2 := &Config{} // pre-scaffold config: no stored family → detect
+	if got := c2.Family(); got != "debian" {
+		t.Errorf("Family() = %q, want detected \"debian\"", got)
+	}
+	// Omarchy identity is orthogonal to family
+	c3 := &Config{Distro: "omarchy", DistroFamily: "arch"}
+	if !c3.IsOmarchy() {
+		t.Error("IsOmarchy() must key off Distro, independent of family")
+	}
+}

@@ -179,10 +179,36 @@ func setupMock(t *testing.T) *mockUFW {
 	// real $HOME if ensureUFWEnabled ever runs the enable path.
 	oldMarker := ufwStateMarker
 	ufwStateMarker = filepath.Join(t.TempDir(), ".ufw-enabled-by-lazyvpn")
+
+	// Sandbox the IPv6 sysctl conf path and the three helpers that shell out
+	// to sudo for it, for the same reason as the marker above. Left at their
+	// defaults these run a real `sudo -n tee/rm/sysctl -p` against
+	// /etc/sysctl.d/99-lazyvpn-ipv6.conf — the user's actual IPv6 protection
+	// config, which the installer creates by default (its prompt is [Y/n]).
+	// TestEnableIPv6ProcWriteFailure stubbed only ipv6ProcPaths and writeFile,
+	// so its EnableIPv6 call `sudo rm`'d that real file: IPv6 silently came
+	// back at the developer's next reboot while UFW rules still advertised
+	// protection as on. Defaulting these to temp-path equivalents means a test
+	// has to opt IN to touching the host, rather than opt out.
+	oldSysctlPath := sysctlIPv6ConfPath
+	oldWriteSysctl := writeSysctlConf
+	oldRemoveSysctl := removeSysctlConf
+	oldApplySysctl := applySysctlConf
+	sysctlIPv6ConfPath = filepath.Join(t.TempDir(), "99-lazyvpn-ipv6.conf")
+	writeSysctlConf = func(content string) error {
+		return os.WriteFile(sysctlIPv6ConfPath, []byte(content), 0644)
+	}
+	removeSysctlConf = func() error { return os.Remove(sysctlIPv6ConfPath) }
+	applySysctlConf = func() error { return nil }
+
 	t.Cleanup(func() {
 		SetTestMode(NoopRunner{})
 		SetLogFunc(nil)
 		ufwStateMarker = oldMarker
+		sysctlIPv6ConfPath = oldSysctlPath
+		writeSysctlConf = oldWriteSysctl
+		removeSysctlConf = oldRemoveSysctl
+		applySysctlConf = oldApplySysctl
 	})
 	return mock
 }
@@ -1764,21 +1790,64 @@ func TestDisableIPv6ProcWriteFailure_FallsBackToSysctlP(t *testing.T) {
 	oldProcPaths := ipv6ProcPaths
 	oldWriteFile := writeFile
 	oldWriteSysctl := writeSysctlConf
+	oldApplySysctl := applySysctlConf
 	ipv6ProcPaths = []string{"/nonexistent/dir/disable_ipv6"}
 	writeFile = os.WriteFile
 	writeSysctlConf = func(string) error { return nil } // pretend persistent conf wrote OK
+	// Stub the sysctl -p fallback as failing. Previously this was left
+	// unstubbed and the test shelled out to a real `sudo -n sysctl -p
+	// /etc/sysctl.d/99-lazyvpn-ipv6.conf`, then asserted it fails "because
+	// the test env has no NOPASSWD". Both halves of that are wrong on a
+	// developer machine: `lazyvpn install` grants exactly that command
+	// NOPASSWD, and its IPv6 prompt defaults to yes, so the conf file is
+	// usually present too — sysctl -p then SUCCEEDS and the test fails for
+	// reasons having nothing to do with the code under test.
+	applySysctlConf = func() error { return fmt.Errorf("simulated sysctl -p failure") }
 	t.Cleanup(func() {
 		ipv6ProcPaths = oldProcPaths
 		writeFile = oldWriteFile
 		writeSysctlConf = oldWriteSysctl
+		applySysctlConf = oldApplySysctl
 	})
 
 	err := DisableIPv6()
-	// sysctl -p fallback runs `sudo -n sysctl -p ...` which will fail in
-	// the test env (no NOPASSWD). What matters is that DisableIPv6 surfaces
-	// the failure rather than swallowing both layers silently.
+	// Layer 1 (/proc) failed and the sysctl -p fallback failed too. What
+	// matters is that DisableIPv6 surfaces the failure rather than
+	// swallowing both layers silently.
 	if err == nil {
-		t.Error("expected error: Layer 1 failed and sysctl -p fallback should also fail in test env")
+		t.Error("expected error: Layer 1 failed and sysctl -p fallback also failed")
+	}
+}
+
+// Companion to the above: Layer 1 fails, Layer 2 writes the conf, and the
+// sysctl -p fallback SUCCEEDS — the install-flow path where the process has
+// no caps yet. DisableIPv6 must report success, since the kernel state did
+// get applied. Pins the success branch that the old host-dependent test
+// silently exercised whenever the conf file happened to exist.
+func TestDisableIPv6ProcWriteFailure_SysctlPSucceeds(t *testing.T) {
+	setupMock(t)
+
+	oldProcPaths := ipv6ProcPaths
+	oldWriteFile := writeFile
+	oldWriteSysctl := writeSysctlConf
+	oldApplySysctl := applySysctlConf
+	ipv6ProcPaths = []string{"/nonexistent/dir/disable_ipv6"}
+	writeFile = os.WriteFile
+	writeSysctlConf = func(string) error { return nil }
+	applied := false
+	applySysctlConf = func() error { applied = true; return nil }
+	t.Cleanup(func() {
+		ipv6ProcPaths = oldProcPaths
+		writeFile = oldWriteFile
+		writeSysctlConf = oldWriteSysctl
+		applySysctlConf = oldApplySysctl
+	})
+
+	if err := DisableIPv6(); err != nil {
+		t.Errorf("expected success when sysctl -p fallback applies the conf, got: %v", err)
+	}
+	if !applied {
+		t.Error("sysctl -p fallback was never invoked — Layer 1 failure should trigger it")
 	}
 }
 

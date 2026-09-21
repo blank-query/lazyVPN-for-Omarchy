@@ -295,6 +295,19 @@ func (l *Layout) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return l, tea.Batch(cmds...)
 
+	case statusFooterRefreshMsg:
+		// The result of the footer's own async netlink/UFW probe
+		// (dispatched by StatusUpdateMsg above). This must be routed
+		// here explicitly — it doesn't match any other case, and the
+		// catch-all below only forwards non-key messages to l.content,
+		// never to l.footer. Without this case the footer's connected/
+		// killswitch fields never leave their zero-value default and
+		// the status bar shows DISCONNECTED forever regardless of the
+		// real connection state.
+		footerUpdated, footerCmd := l.footer.Update(msg)
+		l.footer = footerUpdated
+		return l, footerCmd
+
 	case LoggingActiveMsg:
 		l.footer.OverlayText = "Logging active: " + msg.Summary
 		l.footer.OverlayIsError = false
