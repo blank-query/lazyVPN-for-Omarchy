@@ -2,6 +2,25 @@
 
 All notable changes to LazyVPN are documented here.
 
+## 1.0.6
+
+- **Installer no longer blocks NetworkManager systems.** Stock Omarchy ships
+  NetworkManager with `systemd-networkd` disabled, and the install-time gate
+  was still checking for networkd — blocking the tool's primary target
+  platform for no reason. It now checks `systemd-resolved` instead (active or
+  enabled), which is what VPN DNS actually depends on. Thanks to @jr00n for
+  finding and reporting this.
+- **Fixes the persistent status bar.** It's been stuck showing "Disconnected"
+  (and never showing the killswitch icon) regardless of the real connection
+  state since the very first 1.0.0 release — a routing bug meant the footer
+  never received its own refresh results. The dashboard and waybar were
+  unaffected; this was footer-only.
+- Sudoers generation is now parameterized by distro family internally,
+  scaffolding for non-Arch support down the road. No behavior change on
+  Arch/Omarchy today.
+- Sandboxes two IPv6 tests that were touching real host sudo/sysctl state
+  instead of a mock.
+
 ## 1.0.5
 
 - Tutorial: bring the in-app tutorial in line with the current behavior.
